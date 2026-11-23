@@ -234,42 +234,44 @@ impl Store {
             })
             .collect();
 
+        let project_name_lower = project.name.to_lowercase();
+        let trimmed_root = root_prefix.trim_end_matches(['/', '\\']);
+
         for task in pending_work.into_iter().take(8) {
             let task_raw = task.split_once(": ").map(|(_, rest)| rest).unwrap_or(&task);
             let task_body = task_raw.split(" — *Status").next().unwrap_or(task_raw).trim();
-            let tokens = extract_task_keywords(task_body);
+            let tokens: Vec<String> = extract_task_keywords(task_body)
+                .into_iter()
+                .filter(|t| *t != project_name_lower)
+                .collect();
             if tokens.is_empty() {
                 continue;
             }
 
             let mut matching_files = Vec::new();
             for code in &code_objects {
-                let title_lower = code.title.to_lowercase();
-                let path_lower = code.path.replace('\\', "/").to_lowercase();
-                let title_stem = Path::new(&code.title)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(str::to_lowercase)
-                    .unwrap_or_default();
+                let rel = if !trimmed_root.is_empty() {
+                    code.path
+                        .strip_prefix(trimmed_root)
+                        .map(|r| r.trim_start_matches(['/', '\\']))
+                        .unwrap_or(&code.path)
+                } else {
+                    &code.path
+                };
 
-                let strong_match = tokens
-                    .iter()
-                    .any(|t| title_stem.contains(t) || path_lower.contains(&format!("/{t}")));
-                let token_hits = tokens
-                    .iter()
-                    .filter(|t| title_lower.contains(t.as_str()) || path_lower.contains(t.as_str()))
-                    .count();
+                let title_tokens = tokenize_identifier(
+                    Path::new(&code.title)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&code.title),
+                );
+                let rel_tokens = tokenize_identifier(rel);
 
-                if strong_match || token_hits >= 2 {
-                    let trimmed_root = root_prefix.trim_end_matches(['/', '\\']);
-                    let rel = if !trimmed_root.is_empty() {
-                        code.path
-                            .strip_prefix(trimmed_root)
-                            .map(|r| r.trim_start_matches(['/', '\\']))
-                            .unwrap_or(&code.path)
-                    } else {
-                        &code.path
-                    };
+                let title_overlap = tokens.iter().filter(|t| title_tokens.contains(*t)).count();
+                let path_overlap = tokens.iter().filter(|t| rel_tokens.contains(*t)).count();
+
+                // Require exact token match on file stem, or at least 2 distinct relative-path token matches.
+                if title_overlap >= 1 || path_overlap >= 2 {
                     matching_files.push(rel.to_string());
                 }
             }
@@ -359,6 +361,20 @@ fn push_if_meaningful(raw: &str, out: &mut HashSet<String>) {
     out.insert(lower);
 }
 
+
+fn tokenize_identifier(raw: &str) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for part in raw.split(|c: char| !c.is_alphanumeric()) {
+        if part.is_empty() {
+            continue;
+        }
+        let lower = part.to_lowercase();
+        if lower.len() >= 2 {
+            out.insert(lower);
+        }
+    }
+    out
+}
 fn extract_task_keywords(task: &str) -> Vec<String> {
     let mut out = Vec::new();
     for raw in task.split(|c: char| !c.is_alphanumeric() && c != '_') {
@@ -477,8 +493,47 @@ mod tests {
         let drift = store.project_drift("demo").unwrap();
         assert!(drift.findings.iter().any(|f| f.kind == "documentation drift"));
         assert!(drift.findings.iter().any(|f| f.kind == "roadmap drift"));
+
+        // Ensure strict token matching does not conflate "Intel" with "intelligence.rs".
+        let mut batch2 = store.begin_index_batch().unwrap();
+        batch2
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/ROADMAP.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "ROADMAP.md".to_string(),
+                summary: None,
+                content_hash: "h_intel".to_string(),
+                size_bytes: 60,
+                modified_at: now - 10 * 86_400,
+                is_noise: false,
+                chunks: vec!["- [ ] Intel GPU boot support".to_string()],
+            })
+            .unwrap();
+        batch2
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/ai/intelligence.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "intelligence.rs".to_string(),
+                summary: None,
+                content_hash: "h_ai".to_string(),
+                size_bytes: 50,
+                modified_at: now - 1000,
+                is_noise: false,
+                chunks: Vec::new(),
+            })
+            .unwrap();
+        batch2.commit().unwrap();
+
+        let drift2 = store.project_drift("demo").unwrap();
+        assert!(!drift2
+            .findings
+            .iter()
+            .any(|f| f.evidence.iter().any(|ev| ev.contains("intelligence.rs"))));
     }
 }
+
 
 
 

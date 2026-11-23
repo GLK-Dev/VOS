@@ -148,10 +148,11 @@ Global flag: `--db <path>` (or `VOS_DB` env var, defaulting to `~/.vos/vos.db`).
 
 ---
 
-## 6. Roadmap After v0.1
+## 6. v1.0 Feature Freeze & Next Focus
 
 - **v0.2 (Validation-driven):** PDF/rich metadata extractors, explicit `relations`, optional local embeddings if FTS5 misses semantic queries.
 - **v0.3 (Automation):** Background daemon (`vosd`) + filesystem watcher (`notify`) + local API.
+
 
 
 
