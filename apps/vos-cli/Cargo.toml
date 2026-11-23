@@ -1,0 +1,19 @@
+[package]
+name = "vos-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "vos"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+vos-core.workspace = true
+vos-indexer.workspace = true
+vos-store.workspace = true

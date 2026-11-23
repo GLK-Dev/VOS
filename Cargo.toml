@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/vos-core",
+    "crates/vos-store",
+    "crates/vos-indexer",
+    "apps/vos-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.10"
+tempfile = "3.14"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.11", features = ["v4"] }
+vos-core = { path = "crates/vos-core" }
+vos-indexer = { path = "crates/vos-indexer" }
+vos-store = { path = "crates/vos-store" }
+walkdir = "2.5"

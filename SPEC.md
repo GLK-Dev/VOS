@@ -1,0 +1,136 @@
+# VOS v0.1 Specification (Canonical)
+
+> **Status:** Canonical v0.1 specification, distilled from `Documents/Idea/Planing1.md`.
+> Any older architecture drafts in `Documents/Idea/` are exploratory notes only.
+
+## 1. Vision & Scope
+
+**VOS (Vector Operating System)** is an ecosystem built on top of an existing host OS (Linux-first).
+Its immediate, verifiable product core is a **Project Memory System**: a fast local tool that helps a developer or researcher answer:
+
+- What belongs to this project (code, notes, docs, models)?
+- What changed recently?
+- Where did I stop, and how do I recover context quickly?
+
+### v0.1 Non-Goals (Explicitly Out of Scope)
+
+To avoid building infrastructure before proving daily utility, v0.1 **must not** include:
+
+- Background daemon (`vosd`) or filesystem watchers (`notify`)
+- Job queues or async worker pools
+- Embeddings, vector databases, Ollama/LLM calls, RAG, or autonomous agents
+- Relation graphs (deferred to v0.2)
+- Custom shell, Wayland compositor, or desktop UI
+
+---
+
+## 2. Workspace Architecture
+
+```text
+vos/ (repo root)
+├── Cargo.toml                  # Workspace manifest
+├── migrations/
+│   └── 0001_init.sql           # SQLite schema + FTS5 + triggers + indexes
+├── apps/
+│   └── vos-cli/                # Binary `vos`: CLI parsing & terminal rendering only
+└── crates/
+    ├── vos-core/               # Domain models, error types, path/hash/classification helpers
+    ├── vos-store/              # SQLite persistence, FTS5 search, context & timeline queries
+    └── vos-indexer/            # Directory walker, ignore rules, chunking, idempotent sync
+```
+
+**Layering rule:** `vos-cli` contains zero business logic or raw SQL; it parses arguments, calls services in `vos-store` / `vos-indexer`, and formats output.
+
+---
+
+## 3. Canonical SQLite Schema (v0.1)
+
+SQLite runs with `PRAGMA foreign_keys = ON;` and `PRAGMA journal_mode = WAL;`.
+
+### Tables
+
+1. **`projects`**
+   - `id TEXT PRIMARY KEY`
+   - `name TEXT NOT NULL UNIQUE`
+   - `root_path TEXT`
+   - `description TEXT`
+   - `created_at INTEGER NOT NULL`
+   - `updated_at INTEGER NOT NULL`
+
+2. **`objects`**
+   - `id TEXT PRIMARY KEY`
+   - `project_id TEXT REFERENCES projects(id) ON DELETE SET NULL`
+   - `path TEXT NOT NULL UNIQUE` (canonical absolute path)
+   - `kind TEXT NOT NULL` (`code` | `doc` | `note` | `model` | `media` | `other`)
+   - `title TEXT NOT NULL`
+   - `summary TEXT` (first meaningful lines or extracted metadata)
+   - `content_hash TEXT NOT NULL` (SHA-256 hex)
+   - `size_bytes INTEGER NOT NULL`
+   - `modified_at INTEGER NOT NULL`
+   - `indexed_at INTEGER NOT NULL`
+   - `is_deleted INTEGER NOT NULL DEFAULT 0`
+   - `deleted_at INTEGER`
+
+3. **`chunks`**
+   - `id TEXT PRIMARY KEY`
+   - `object_id TEXT NOT NULL REFERENCES objects(id) ON DELETE CASCADE`
+   - `chunk_index INTEGER NOT NULL`
+   - `text TEXT NOT NULL`
+   - `UNIQUE (object_id, chunk_index)`
+
+4. **`tags`**
+   - `object_id TEXT NOT NULL REFERENCES objects(id) ON DELETE CASCADE`
+   - `tag TEXT NOT NULL`
+   - `source TEXT NOT NULL DEFAULT 'manual'` (`auto` | `manual`)
+   - `PRIMARY KEY (object_id, tag)`
+
+5. **`events`** (Project Timeline)
+   - `id INTEGER PRIMARY KEY AUTOINCREMENT`
+   - `project_id TEXT REFERENCES projects(id) ON DELETE CASCADE`
+   - `object_id TEXT REFERENCES objects(id) ON DELETE CASCADE`
+   - `event_type TEXT NOT NULL` (`added` | `modified` | `deleted` | `restored`)
+   - `path TEXT NOT NULL`
+   - `detail TEXT`
+   - `created_at INTEGER NOT NULL`
+
+### Full-Text Search (FTS5 External Content)
+
+- `objects_fts`: `USING fts5(title, path, summary, content='objects', content_rowid='rowid', tokenize='porter unicode61')` with `AFTER INSERT`, `AFTER UPDATE`, `AFTER DELETE` triggers.
+- `chunks_fts`: `USING fts5(text, content='chunks', content_rowid='rowid', tokenize='porter unicode61')` with `AFTER INSERT`, `AFTER UPDATE`, `AFTER DELETE` triggers.
+
+Soft-deleted objects (`is_deleted = 1`) are filtered out in search queries (`WHERE o.is_deleted = 0`).
+
+---
+
+## 4. Indexing Semantics
+
+Running `vos index <path>` must be **idempotent**:
+
+1. Walk `<path>` while skipping ignored directories (`.git`, `target`, `node_modules`, `.venv`, `__pycache__`, `dist`, `build`, `.vos`).
+2. Classify each file (`code`, `note`, `doc`, `model`, `media`, `other`).
+3. Compute SHA-256 `content_hash` and `modified_at`.
+4. If the path exists in `objects` with the same `content_hash` and `is_deleted = 0`, skip re-chunking.
+5. Otherwise upsert `objects`, replace `chunks` for text-readable files (`code`, `note`), and record an `events` entry (`added`, `modified`, or `restored`).
+6. For objects scoped under the indexed path/project that are no longer on disk and have `is_deleted = 0`, mark `is_deleted = 1`, set `deleted_at`, and record a `deleted` event.
+
+---
+
+## 5. CLI Contract (v0.1)
+
+- `vos project create <name> <path> [--description <text>]`
+- `vos project list`
+- `vos index <path> [--project <name>]`
+- `vos search <query> [--project <name>] [--limit <n>]`
+- `vos show <id_or_path>`
+- `vos tag <id_or_path> <tags...>`
+- `vos context <project>`
+- `vos timeline <project> [--limit <n>]`
+
+Global flag: `--db <path>` (or `VOS_DB` env var, defaulting to `./.vos/vos.db` or user data dir).
+
+---
+
+## 6. Roadmap After v0.1
+
+- **v0.2 (Validation-driven):** PDF/rich metadata extractors, explicit `relations`, optional local embeddings if FTS5 misses semantic queries.
+- **v0.3 (Automation):** Background daemon (`vosd`) + filesystem watcher (`notify`) + local API.
