@@ -1,36 +1,12 @@
-use std::collections::HashMap;
 use std::path::Path;
 
 use rusqlite::{OptionalExtension, params};
 use vos_core::util::canonicalize_path;
 use vos_core::{
     EventRecord, EventType, ObjectDetails, ObjectKind, ObjectRecord, Project, ProjectContext,
-    SearchHit,
 };
 
 use crate::{Store, StoreError};
-
-/// Score bonus when a query token matches the file name or file stem exactly.
-const TITLE_EXACT_MATCH_BOOST: f64 = 25.0;
-/// Score bonus when a query token (>= 3 chars) appears inside the file name.
-const TITLE_CONTAINS_BOOST: f64 = 10.0;
-/// Score bonus when a query token (>= 3 chars) appears in the object path.
-const PATH_CONTAINS_BOOST: f64 = 5.0;
-/// Score bonus when `objects_fts` (title/path/summary) matches directly.
-const OBJECT_FTS_SIGNAL_BOOST: f64 = 4.0;
-/// Additional score per extra matching chunk in the same file (capped).
-const MULTI_CHUNK_STEP_BOOST: f64 = 1.5;
-const MULTI_CHUNK_MAX_BOOST: f64 = 6.0;
-/// Penalty applied to lockfiles and housekeeping noise during search ranking.
-const NOISE_PENALTY: f64 = -10.0;
-
-struct SearchCandidate {
-    hit: SearchHit,
-    chunk_hits: usize,
-    matched_object_fts: bool,
-    best_chunk_bm25: Option<f64>,
-    object_bm25: Option<f64>,
-}
 
 impl Store {
     /// Loads full metadata, project binding, and tags for an object by ID, path, or unique title.
@@ -90,150 +66,6 @@ impl Store {
             tags,
             chunk_count: chunk_count.max(0) as usize,
         })
-    }
-
-    /// Performs full-text BM25 search across `chunks_fts` and `objects_fts` with deterministic title/path boosts.
-    pub fn search(
-        &self,
-        query: &str,
-        project_name: Option<&str>,
-        limit: usize,
-    ) -> Result<Vec<SearchHit>, StoreError> {
-        let fts_query = build_fts_query(query)?;
-        let query_terms: Vec<String> = query
-            .split_whitespace()
-            .filter(|t| !t.is_empty())
-            .map(|t| t.to_lowercase())
-            .collect();
-
-        let requested_limit = limit.clamp(1, 200);
-        let pool_limit = (requested_limit * 6).max(60) as i64;
-        let mut merged: HashMap<String, SearchCandidate> = HashMap::new();
-
-        {
-            let mut stmt = self.conn.prepare(
-                "SELECT o.id, p.name, o.title, o.path, o.kind, o.is_noise,
-                        snippet(chunks_fts, 0, '[', ']', '...', 24) AS snip,
-                        bm25(chunks_fts) AS rank
-                 FROM chunks_fts
-                 JOIN chunks c ON c.rowid = chunks_fts.rowid
-                 JOIN objects o ON o.id = c.object_id
-                 LEFT JOIN projects p ON p.id = o.project_id
-                 WHERE chunks_fts MATCH ?1
-                   AND o.is_deleted = 0
-                   AND (?2 IS NULL OR p.name = ?2)
-                 ORDER BY rank
-                 LIMIT ?3",
-            )?;
-
-            let rows = stmt.query_map(params![fts_query, project_name, pool_limit], |row| {
-                let kind_str: String = row.get(4)?;
-                let is_noise: i64 = row.get(5)?;
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    ObjectKind::from_db(&kind_str),
-                    is_noise != 0,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, f64>(7)?,
-                ))
-            })?;
-
-            for row in rows {
-                let (id, pname, title, path, kind, is_noise, snippet, bm25_rank) = row?;
-                let entry = merged.entry(id.clone()).or_insert_with(|| SearchCandidate {
-                    hit: SearchHit {
-                        object_id: id,
-                        project_name: pname,
-                        title,
-                        path,
-                        kind,
-                        is_noise,
-                        snippet: snippet.clone(),
-                        score: 0.0,
-                    },
-                    chunk_hits: 0,
-                    matched_object_fts: false,
-                    best_chunk_bm25: None,
-                    object_bm25: None,
-                });
-                entry.chunk_hits += 1;
-                if entry.best_chunk_bm25.is_none_or(|prev| bm25_rank < prev) {
-                    entry.best_chunk_bm25 = Some(bm25_rank);
-                    entry.hit.snippet = snippet;
-                }
-            }
-        }
-
-        {
-            let mut stmt = self.conn.prepare(
-                "SELECT o.id, p.name, o.title, o.path, o.kind, o.is_noise,
-                        snippet(objects_fts, -1, '[', ']', '...', 24) AS snip,
-                        bm25(objects_fts, 10.0, 3.0, 1.0) AS rank
-                 FROM objects_fts
-                 JOIN objects o ON o.rowid = objects_fts.rowid
-                 LEFT JOIN projects p ON p.id = o.project_id
-                 WHERE objects_fts MATCH ?1
-                   AND o.is_deleted = 0
-                   AND (?2 IS NULL OR p.name = ?2)
-                 ORDER BY rank
-                 LIMIT ?3",
-            )?;
-
-            let rows = stmt.query_map(params![fts_query, project_name, pool_limit], |row| {
-                let kind_str: String = row.get(4)?;
-                let is_noise: i64 = row.get(5)?;
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    ObjectKind::from_db(&kind_str),
-                    is_noise != 0,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, f64>(7)?,
-                ))
-            })?;
-
-            for row in rows {
-                let (id, pname, title, path, kind, is_noise, snippet, bm25_rank) = row?;
-                let entry = merged.entry(id.clone()).or_insert_with(|| SearchCandidate {
-                    hit: SearchHit {
-                        object_id: id,
-                        project_name: pname,
-                        title,
-                        path,
-                        kind,
-                        is_noise,
-                        snippet: snippet.clone(),
-                        score: 0.0,
-                    },
-                    chunk_hits: 0,
-                    matched_object_fts: false,
-                    best_chunk_bm25: None,
-                    object_bm25: None,
-                });
-                entry.matched_object_fts = true;
-                entry.object_bm25 = Some(bm25_rank);
-                if entry.hit.snippet.trim().is_empty() {
-                    entry.hit.snippet = snippet;
-                }
-            }
-        }
-
-        let mut hits: Vec<SearchHit> = merged
-            .into_values()
-            .map(|mut cand| {
-                cand.hit.score = score_search_candidate(&cand, &query_terms);
-                cand.hit
-            })
-            .collect();
-
-        hits.sort_by(|a, b| b.score.total_cmp(&a.score));
-        hits.truncate(requested_limit);
-        Ok(hits)
     }
 
     /// Builds a prioritized recovery context snapshot for a project, filtering noise unless requested.
@@ -411,7 +243,6 @@ impl Store {
             )));
         }
 
-        // Also try normalized path suffix match (e.g. `docs/ROADMAP.md` or `transformer/mod.rs`).
         let norm_target = target.replace('\\', "/").trim_start_matches('/').to_lowercase();
         let mut all_stmt = self.conn.prepare(
             "SELECT o.id, o.project_id, o.path, o.kind, o.title, o.summary, o.content_hash,
@@ -437,61 +268,6 @@ impl Store {
             Ok(None)
         }
     }
-}
-
-fn score_search_candidate(cand: &SearchCandidate, query_terms: &[String]) -> f64 {
-    let chunk_bm25_mag = cand.best_chunk_bm25.map(|r| (-r).max(0.0)).unwrap_or(0.0);
-    let obj_bm25_mag = cand.object_bm25.map(|r| (-r).max(0.0)).unwrap_or(0.0);
-    let mut score = chunk_bm25_mag.max(obj_bm25_mag);
-
-    if cand.matched_object_fts {
-        score += OBJECT_FTS_SIGNAL_BOOST;
-    }
-
-    if cand.chunk_hits > 1 {
-        let extra = ((cand.chunk_hits - 1) as f64 * MULTI_CHUNK_STEP_BOOST)
-            .min(MULTI_CHUNK_MAX_BOOST);
-        score += extra;
-    }
-
-    let title_lower = cand.hit.title.to_lowercase();
-    let stem_lower = Path::new(&cand.hit.title)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(str::to_lowercase)
-        .unwrap_or_default();
-    let path_lower = cand.hit.path.to_lowercase();
-
-    let mut exact_title_hit = false;
-    let mut partial_title_hit = false;
-    let mut path_hit = false;
-
-    for term in query_terms {
-        if title_lower == *term || stem_lower == *term {
-            exact_title_hit = true;
-        } else if term.len() >= 3 && title_lower.contains(term) {
-            partial_title_hit = true;
-        }
-        if term.len() >= 3 && path_lower.contains(term) {
-            path_hit = true;
-        }
-    }
-
-    if exact_title_hit {
-        score += TITLE_EXACT_MATCH_BOOST;
-    } else if partial_title_hit {
-        score += TITLE_CONTAINS_BOOST;
-    }
-
-    if path_hit {
-        score += PATH_CONTAINS_BOOST;
-    }
-
-    if cand.hit.is_noise {
-        score += NOISE_PENALTY;
-    }
-
-    score
 }
 
 pub(crate) fn map_project_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
@@ -524,22 +300,6 @@ pub(crate) fn map_object_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Object
         deleted_at: row.get(11)?,
         is_noise: is_noise != 0,
     })
-}
-
-fn build_fts_query(raw: &str) -> Result<String, StoreError> {
-    let tokens: Vec<String> = raw
-        .split_whitespace()
-        .filter(|t| !t.is_empty())
-        .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
-        .collect();
-
-    if tokens.is_empty() {
-        return Err(StoreError::InvalidInput(
-            "search query cannot be empty".to_string(),
-        ));
-    }
-
-    Ok(tokens.join(" AND "))
 }
 
 pub(crate) fn build_fts_or_query(terms: &[String]) -> Option<String> {
@@ -589,6 +349,8 @@ mod tests {
         let hits = store.search("schedule_task", Some("ai-os"), 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].title, "scheduler.rs");
+        let sum: f64 = hits[0].signals.iter().map(|s| s.delta).sum();
+        assert!((sum - hits[0].score).abs() < 1e-9);
 
         let repeat = store
             .upsert_object(UpsertObjectInput {
@@ -656,6 +418,54 @@ mod tests {
     }
 
     #[test]
+    fn stage2_or_fallback_recovers_cross_chunk_and_partial_matches() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("demo", None, None).unwrap();
+
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/docs/memory.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "memory.md".to_string(),
+                summary: Some("Event stream notes".to_string()),
+                content_hash: "h1".to_string(),
+                size_bytes: 120,
+                modified_at: 1000,
+                is_noise: false,
+                chunks: vec![
+                    "Section 1: event tracking for files.".to_string(),
+                    "Section 2: structured audit log.".to_string(),
+                ],
+            })
+            .unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/docs/changes.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "changes.md".to_string(),
+                summary: Some("Changes summary".to_string()),
+                content_hash: "h2".to_string(),
+                size_bytes: 90,
+                modified_at: 1000,
+                is_noise: false,
+                chunks: vec!["List of changes across modules.".to_string()],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        let hits = store.search("event log", Some("demo"), 5).unwrap();
+        assert!(!hits.is_empty());
+        assert_eq!(hits[0].title, "memory.md");
+        assert!(hits[0]
+            .signals
+            .iter()
+            .any(|s| s.label == "all query terms matched"));
+    }
+
+    #[test]
     fn context_filters_noise_and_prioritizes_notes_over_code_same_day() {
         let mut store = Store::open_in_memory().unwrap();
         let project = store.create_project("demo", None, None).unwrap();
@@ -715,5 +525,3 @@ mod tests {
         assert_eq!(ctx_all.recent_objects.len(), 3);
     }
 }
-
-

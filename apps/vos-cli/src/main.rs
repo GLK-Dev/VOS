@@ -54,6 +54,9 @@ enum Commands {
         /// Maximum number of results to display.
         #[arg(long, default_value_t = 10)]
         limit: usize,
+        /// Show scoring signals explaining why each hit ranked where it did.
+        #[arg(long)]
+        explain: bool,
     },
     /// Show detailed metadata and tags for an object.
     Show {
@@ -143,6 +146,15 @@ enum BenchmarkCommands {
         /// Path to YAML benchmark file.
         #[arg(long, default_value = "tests/search_live.yaml")]
         config: PathBuf,
+        /// Persist this run into `benchmark_runs` for regression tracking.
+        #[arg(long)]
+        save: bool,
+    },
+    /// Show saved benchmark runs over time.
+    History {
+        /// Maximum number of recent runs to display.
+        #[arg(long, default_value_t = 15)]
+        limit: usize,
     },
 }
 
@@ -238,6 +250,7 @@ fn main() -> Result<()> {
             query,
             project,
             limit,
+            explain,
         } => {
             let hits = store.search(&query, project.as_deref(), limit)?;
             if hits.is_empty() {
@@ -245,17 +258,34 @@ fn main() -> Result<()> {
             } else {
                 for (idx, hit) in hits.iter().enumerate() {
                     let proj = hit.project_name.as_deref().unwrap_or("-");
-                    println!(
-                        "{}. {} [{} | project: {}]",
-                        idx + 1,
-                        hit.title,
-                        hit.kind,
-                        proj
-                    );
+                    if explain {
+                        println!(
+                            "{}. {} [{} | project: {} | score: {:.2}]",
+                            idx + 1,
+                            hit.title,
+                            hit.kind,
+                            proj,
+                            hit.score
+                        );
+                    } else {
+                        println!(
+                            "{}. {} [{} | project: {}]",
+                            idx + 1,
+                            hit.title,
+                            hit.kind,
+                            proj
+                        );
+                    }
                     println!("   {}", hit.path);
                     let compact_snippet = hit.snippet.replace('\n', " ");
                     if !compact_snippet.trim().is_empty() {
                         println!("   {compact_snippet}");
+                    }
+                    if explain && !hit.signals.is_empty() {
+                        println!("   signals:");
+                        for sig in &hit.signals {
+                            println!("     {:+.2} {}", sig.delta, sig.label);
+                        }
                     }
                 }
             }
@@ -660,7 +690,7 @@ fn main() -> Result<()> {
             }
         }
         Commands::Benchmark { action } => match action {
-            BenchmarkCommands::Search { config } => {
+            BenchmarkCommands::Search { config, save } => {
                 let cases = load_benchmark_cases(&config)?;
                 let report = store.run_search_benchmark(&cases)?;
 
@@ -746,6 +776,58 @@ fn main() -> Result<()> {
                         );
                     }
                 }
+
+                if save {
+                    let suite_name = config
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| config.display().to_string());
+                    let run_id = store.save_benchmark_run(&suite_name, &report)?;
+                    println!("\nSaved benchmark run #{run_id} ({suite_name}).");
+                }
+            }
+            BenchmarkCommands::History { limit } => {
+                let runs = store.list_benchmark_runs(limit)?;
+                if runs.is_empty() {
+                    println!("No benchmark runs saved yet. Run `vos benchmark search --save`.");
+                } else {
+                    for run in runs {
+                        let t1 = if run.top1_total > 0 {
+                            format!("{:.1}%", pct(run.top1_passed, run.top1_total))
+                        } else {
+                            "-".to_string()
+                        };
+                        let t3 = if run.top3_total > 0 {
+                            format!("{:.1}%", pct(run.top3_passed, run.top3_total))
+                        } else {
+                            "-".to_string()
+                        };
+                        let t5 = if run.top5_total > 0 {
+                            format!("{:.1}%", pct(run.top5_passed, run.top5_total))
+                        } else {
+                            "-".to_string()
+                        };
+                        let noise = pct(run.noise_hits, run.total_returned_hits);
+                        let cp = if run.cross_project_total > 0 {
+                            format!("{:.1}%", pct(run.cross_project_matched, run.cross_project_total))
+                        } else {
+                            "-".to_string()
+                        };
+                        println!(
+                            "#{} {} | {} ({} q) | T1: {} | T3: {} | T5: {} | MRR: {:.3} | Noise: {:.1}% | Cross: {}",
+                            run.id,
+                            format_ts(run.created_at),
+                            run.suite_name,
+                            run.total_cases,
+                            t1,
+                            t3,
+                            t5,
+                            run.mrr,
+                            noise,
+                            cp
+                        );
+                    }
+                }
             }
         },
     }
@@ -808,5 +890,6 @@ fn display_relative<'a>(path: &'a str, root: &str) -> &'a str {
         .filter(|rest| !rest.is_empty())
         .unwrap_or(path)
 }
+
 
 

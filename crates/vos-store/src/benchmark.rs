@@ -1,9 +1,11 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
+use rusqlite::params;
+use vos_core::util::now_unix;
 use vos_core::{
-    CategoryBenchmarkStats, SearchBenchmarkCase, SearchBenchmarkCaseResult, SearchBenchmarkReport,
-    SearchHit,
+    BenchmarkRunRecord, CategoryBenchmarkStats, SearchBenchmarkCase, SearchBenchmarkCaseResult,
+    SearchBenchmarkReport, SearchHit,
 };
 
 use crate::{Store, StoreError};
@@ -213,6 +215,73 @@ impl Store {
             cases: results,
         })
     }
+
+    /// Persists a benchmark report into `benchmark_runs` for historical regression tracking.
+    pub fn save_benchmark_run(
+        &self,
+        suite_name: &str,
+        report: &SearchBenchmarkReport,
+    ) -> Result<i64, StoreError> {
+        let now = now_unix();
+        self.conn.execute(
+            "INSERT INTO benchmark_runs (
+                suite_name, total_cases, top1_passed, top1_total, top3_passed, top3_total,
+                top5_passed, top5_total, mrr, noise_hits, total_returned_hits,
+                cross_project_matched, cross_project_total, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                suite_name,
+                report.total_cases as i64,
+                report.top1_passed as i64,
+                report.top1_total as i64,
+                report.top3_passed as i64,
+                report.top3_total as i64,
+                report.top5_passed as i64,
+                report.top5_total as i64,
+                report.mrr,
+                report.noise_hits as i64,
+                report.total_returned_hits as i64,
+                report.cross_project_matched as i64,
+                report.cross_project_total as i64,
+                now,
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Returns recent saved benchmark runs (newest first).
+    pub fn list_benchmark_runs(&self, limit: usize) -> Result<Vec<BenchmarkRunRecord>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, suite_name, total_cases, top1_passed, top1_total, top3_passed, top3_total,
+                    top5_passed, top5_total, mrr, noise_hits, total_returned_hits,
+                    cross_project_matched, cross_project_total, created_at
+             FROM benchmark_runs
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?1",
+        )?;
+
+        let rows = stmt.query_map(params![limit.clamp(1, 100) as i64], |row| {
+            Ok(BenchmarkRunRecord {
+                id: row.get(0)?,
+                suite_name: row.get(1)?,
+                total_cases: row.get::<_, i64>(2)?.max(0) as usize,
+                top1_passed: row.get::<_, i64>(3)?.max(0) as usize,
+                top1_total: row.get::<_, i64>(4)?.max(0) as usize,
+                top3_passed: row.get::<_, i64>(5)?.max(0) as usize,
+                top3_total: row.get::<_, i64>(6)?.max(0) as usize,
+                top5_passed: row.get::<_, i64>(7)?.max(0) as usize,
+                top5_total: row.get::<_, i64>(8)?.max(0) as usize,
+                mrr: row.get(9)?,
+                noise_hits: row.get::<_, i64>(10)?.max(0) as usize,
+                total_returned_hits: row.get::<_, i64>(11)?.max(0) as usize,
+                cross_project_matched: row.get::<_, i64>(12)?.max(0) as usize,
+                cross_project_total: row.get::<_, i64>(13)?.max(0) as usize,
+                created_at: row.get(14)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+    }
 }
 
 fn matches_expected(hit: &SearchHit, expected: &[String]) -> bool {
@@ -226,3 +295,4 @@ fn matches_expected(hit: &SearchHit, expected: &[String]) -> bool {
         norm_actual == norm_exp || norm_actual.ends_with(&format!("/{norm_exp}"))
     })
 }
+

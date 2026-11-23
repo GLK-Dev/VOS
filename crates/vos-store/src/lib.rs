@@ -4,6 +4,7 @@ mod batch;
 mod benchmark;
 mod queries;
 mod recovery;
+mod search;
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -21,6 +22,7 @@ pub use benchmark::load_benchmark_cases;
 const MIGRATIONS: &[(&str, &str)] = &[
     ("0001_init", include_str!("../../../migrations/0001_init.sql")),
     ("0002_noise", include_str!("../../../migrations/0002_noise.sql")),
+    ("0003_benchmark_history", include_str!("../../../migrations/0003_benchmark_history.sql")),
 ];
 
 /// Errors returned by the SQLite store layer.
@@ -299,5 +301,7 @@ impl Store {
         Ok(details.object)
     }
 }
+
+
 
 

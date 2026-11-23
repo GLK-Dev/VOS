@@ -31,7 +31,8 @@ vos/ (repo root)
 ├── Cargo.toml                  # Workspace manifest
 ├── migrations/
 │   ├── 0001_init.sql           # SQLite schema + FTS5 + triggers + indexes
-│   └── 0002_noise.sql          # Noise classification column and indexes
+│   ├── 0002_noise.sql          # Noise classification column and indexes
+│   └── 0003_benchmark_history.sql # Saved benchmark accuracy runs
 ├── apps/
 │   └── vos-cli/                # Binary `vos`: CLI parsing & terminal rendering only
 └── crates/
@@ -122,7 +123,7 @@ Running `vos index <path>` must be **idempotent**:
 - `vos project create <name> <path> [--description <text>]`
 - `vos project list`
 - `vos index <path> [--project <name>]`
-- `vos search <query> [--project <name>] [--limit <n>]`
+- `vos search <query> [--project <name>] [--limit <n>] [--explain]`
 - `vos show <id_or_path>`
 - `vos tag <id_or_path> <tags...>`
 - `vos context <project> [--limit <n>] [--include-noise]`
@@ -132,7 +133,8 @@ Running `vos index <path>` must be **idempotent**:
 - `vos resume <project>`
 - `vos related <target> [--project <name>] [--limit <n>]`
 - `vos why <target> [--project <name>]`
-- `vos benchmark search [--config <path>]`
+- `vos benchmark search [--config <path>] [--save]`
+- `vos benchmark history [--limit <n>]`
 
 Global flag: `--db <path>` (or `VOS_DB` env var, defaulting to `~/.vos/vos.db`).
 
@@ -142,6 +144,7 @@ Global flag: `--db <path>` (or `VOS_DB` env var, defaulting to `~/.vos/vos.db`).
 
 - **v0.2 (Validation-driven):** PDF/rich metadata extractors, explicit `relations`, optional local embeddings if FTS5 misses semantic queries.
 - **v0.3 (Automation):** Background daemon (`vosd`) + filesystem watcher (`notify`) + local API.
+
 
 
 

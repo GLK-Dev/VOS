@@ -6,8 +6,8 @@ pub mod util;
 
 pub use error::VosError;
 pub use models::{
-    ActiveArea, CategoryBenchmarkStats, EventRecord, EventType, ObjectDetails, ObjectKind,
-    ObjectRecord, ObjectWhy, Project, ProjectActivity, ProjectContext, ProjectResume, ProjectStart,
-    ProjectSummary, RelatedHit, SearchBenchmarkCase, SearchBenchmarkCaseResult,
-    SearchBenchmarkReport, SearchHit,
+    ActiveArea, BenchmarkRunRecord, CategoryBenchmarkStats, EventRecord, EventType, ObjectDetails,
+    ObjectKind, ObjectRecord, ObjectWhy, Project, ProjectActivity, ProjectContext, ProjectResume,
+    ProjectStart, ProjectSummary, RelatedHit, SearchBenchmarkCase, SearchBenchmarkCaseResult,
+    SearchBenchmarkReport, SearchHit, SearchSignal,
 };

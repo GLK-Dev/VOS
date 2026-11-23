@@ -149,6 +149,13 @@ pub struct ObjectDetails {
     pub chunk_count: usize,
 }
 
+/// Individual scoring contribution returned for `vos search --explain`.
+#[derive(Debug, Clone)]
+pub struct SearchSignal {
+    pub label: String,
+    pub delta: f64,
+}
+
 /// Ranked full-text search hit across `chunks_fts` and `objects_fts`.
 #[derive(Debug, Clone)]
 pub struct SearchHit {
@@ -160,6 +167,7 @@ pub struct SearchHit {
     pub is_noise: bool,
     pub snippet: String,
     pub score: f64,
+    pub signals: Vec<SearchSignal>,
 }
 
 /// Timeline event entry for a project.
@@ -315,4 +323,24 @@ pub struct SearchBenchmarkReport {
     pub cross_project_total: usize,
     pub categories: Vec<CategoryBenchmarkStats>,
     pub cases: Vec<SearchBenchmarkCaseResult>,
+}
+
+/// Persisted benchmark summary row stored in `benchmark_runs`.
+#[derive(Debug, Clone)]
+pub struct BenchmarkRunRecord {
+    pub id: i64,
+    pub suite_name: String,
+    pub total_cases: usize,
+    pub top1_passed: usize,
+    pub top1_total: usize,
+    pub top3_passed: usize,
+    pub top3_total: usize,
+    pub top5_passed: usize,
+    pub top5_total: usize,
+    pub mrr: f64,
+    pub noise_hits: usize,
+    pub total_returned_hits: usize,
+    pub cross_project_matched: usize,
+    pub cross_project_total: usize,
+    pub created_at: i64,
 }
