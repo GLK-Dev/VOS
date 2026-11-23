@@ -1,0 +1,209 @@
+use std::fs;
+use std::path::Path;
+use std::process::Command;
+
+use tempfile::TempDir;
+
+fn run_vos(db: &Path, args: &[&str]) -> (bool, String, String) {
+    let bin = env!("CARGO_BIN_EXE_vos");
+    let out = Command::new(bin)
+        .arg("--db")
+        .arg(db)
+        .args(args)
+        .output()
+        .expect("execute vos binary");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+fn assert_vos_ok(db: &Path, args: &[&str]) -> String {
+    let (ok, stdout, stderr) = run_vos(db, args);
+    assert!(
+        ok,
+        "vos {:?} failed.\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        args
+    );
+    stdout
+}
+
+#[test]
+fn cli_full_v1_workflow_end_to_end() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("alpha");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::create_dir_all(proj.join("docs")).unwrap();
+    fs::create_dir_all(proj.join("config")).unwrap();
+
+    fs::write(
+        proj.join("README.md"),
+        "# Alpha\nAlpha is a deterministic project memory engine.",
+    )
+    .unwrap();
+    fs::write(
+        proj.join("docs/ROADMAP.md"),
+        "# Roadmap\n- [ ] Build scheduler fairness tests\nOPEN QUESTION: keep WAL?",
+    )
+    .unwrap();
+    fs::write(
+        proj.join("src/scheduler.rs"),
+        "pub fn schedule_task() {\n    // fair queue scheduler\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        proj.join("config/concepts.yaml"),
+        "event log:\n  - scheduler\n",
+    )
+    .unwrap();
+
+    let created = assert_vos_ok(
+        &db,
+        &[
+            "project",
+            "create",
+            "alpha",
+            proj.to_str().unwrap(),
+            "--description",
+            "Alpha workspace",
+        ],
+    );
+    assert!(created.contains("Created project 'alpha'"));
+
+    let indexed = assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "alpha"]);
+    assert!(indexed.contains("Scanned:   4"));
+    assert!(indexed.contains("added: 4"));
+
+    // Repeat index must be 100% unchanged.
+    let reindexed = assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "alpha"]);
+    assert!(reindexed.contains("Unchanged: 4"));
+
+    let list = assert_vos_ok(&db, &["project", "list"]);
+    assert!(list.contains("alpha"));
+
+    let search = assert_vos_ok(&db, &["search", "scheduler", "--explain"]);
+    assert!(search.contains("scheduler.rs"));
+    assert!(search.contains("signals:"));
+
+    let tag_out = assert_vos_ok(&db, &["tag", "scheduler.rs", "kernel", "core"]);
+    assert!(tag_out.contains("Tagged 'scheduler.rs'"));
+
+    let show_out = assert_vos_ok(&db, &["show", "scheduler.rs"]);
+    assert!(show_out.contains("kernel (manual)"));
+
+    let why_out = assert_vos_ok(&db, &["why", "scheduler.rs"]);
+    assert!(why_out.contains("Why it matters:"));
+
+    let rel_out = assert_vos_ok(&db, &["related", "scheduler"]);
+    assert!(rel_out.contains("scheduler.rs"));
+
+    let resume_out = assert_vos_ok(&db, &["resume", "alpha"]);
+    assert!(resume_out.contains("Suggested starting points:"));
+
+    let start_out = assert_vos_ok(&db, &["start", "alpha"]);
+    assert!(start_out.contains("Open questions:"));
+    assert!(start_out.contains("keep WAL?"));
+
+    let cont_out = assert_vos_ok(&db, &["continue", "alpha"]);
+    assert!(cont_out.contains("Continue from:"));
+
+    let ctx_out = assert_vos_ok(&db, &["context", "alpha"]);
+    assert!(ctx_out.contains("Important recent files:"));
+
+    let act_out = assert_vos_ok(&db, &["activity", "alpha", "--days", "7"]);
+    assert!(act_out.contains("added"));
+
+    let tl_out = assert_vos_ok(&db, &["timeline", "alpha"]);
+    assert!(tl_out.contains("scheduler.rs"));
+
+    let status_out = assert_vos_ok(&db, &["status", "alpha"]);
+    assert!(status_out.contains("Health: Active"));
+    assert!(status_out.contains("Pending work:"));
+
+    let explain_out = assert_vos_ok(&db, &["explain", "project memory", "--project", "alpha"]);
+    assert!(explain_out.contains("Files contributing:"));
+
+    let evo_out = assert_vos_ok(&db, &["evolution", "alpha", "--since", "30d"]);
+    assert!(evo_out.contains("Evolution: alpha"));
+
+    let drift_out = assert_vos_ok(&db, &["drift", "alpha"]);
+    assert!(drift_out.contains("roadmap drift"));
+
+    let cs_out = assert_vos_ok(&db, &["changed-since", "7d", "alpha"]);
+    assert!(cs_out.contains("Added (4):"));
+
+    // Run YAML benchmark & save history
+    let bench_yaml = tmp.path().join("bench.yaml");
+    fs::write(
+        &bench_yaml,
+        "- query: scheduler\n  expected_top1:\n    - src/scheduler.rs\n",
+    )
+    .unwrap();
+    let bench_out = assert_vos_ok(
+        &db,
+        &[
+            "benchmark",
+            "search",
+            "--config",
+            bench_yaml.to_str().unwrap(),
+            "--save",
+        ],
+    );
+    assert!(bench_out.contains("Top-1: 1/1 (100.0%)"));
+
+    let hist_out = assert_vos_ok(&db, &["benchmark", "history"]);
+    assert!(hist_out.contains("bench.yaml"));
+}
+
+#[test]
+fn cli_handles_soft_delete_and_restore_idempotently() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("repo");
+    fs::create_dir_all(&proj).unwrap();
+    let note = proj.join("notes.md");
+    fs::write(&note, "# Notes\nunique_token_alpha\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "repo", proj.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "repo"]);
+    assert!(assert_vos_ok(&db, &["search", "unique_token_alpha"]).contains("notes.md"));
+
+    // Delete file and re-index -> hidden from search.
+    fs::remove_file(&note).unwrap();
+    let del_idx = assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "repo"]);
+    assert!(del_idx.contains("Deleted:   1"));
+    assert!(assert_vos_ok(&db, &["search", "unique_token_alpha"]).contains("No matches found"));
+
+    // Recreate file and re-index -> restored and searchable again.
+    fs::write(&note, "# Notes\nunique_token_alpha restored\n").unwrap();
+    let rest_idx = assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "repo"]);
+    assert!(rest_idx.contains("restored: 1"));
+    assert!(assert_vos_ok(&db, &["search", "unique_token_alpha"]).contains("notes.md"));
+    assert!(assert_vos_ok(&db, &["timeline", "repo"]).contains("restored:"));
+}
+
+#[test]
+fn cli_disambiguates_shared_filenames_by_project_flag() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let a = tmp.path().join("a");
+    let b = tmp.path().join("b");
+    fs::create_dir_all(&a).unwrap();
+    fs::create_dir_all(&b).unwrap();
+    fs::write(a.join("README.md"), "# A").unwrap();
+    fs::write(b.join("README.md"), "# B").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "a", a.to_str().unwrap()]);
+    assert_vos_ok(&db, &["project", "create", "b", b.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", a.to_str().unwrap(), "--project", "a"]);
+    assert_vos_ok(&db, &["index", b.to_str().unwrap(), "--project", "b"]);
+
+    let (ok, _, stderr) = run_vos(&db, &["why", "README.md"]);
+    assert!(!ok);
+    assert!(stderr.contains("ambiguous object"));
+
+    let scoped = assert_vos_ok(&db, &["why", "README.md", "--project", "a"]);
+    assert!(scoped.contains("Project:\n  a"));
+}

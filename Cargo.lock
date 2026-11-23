@@ -912,6 +912,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
  "vos-core",
