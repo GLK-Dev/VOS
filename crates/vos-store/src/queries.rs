@@ -10,6 +10,29 @@ use vos_core::{
 
 use crate::{Store, StoreError};
 
+/// Score bonus when a query token matches the file name or file stem exactly.
+const TITLE_EXACT_MATCH_BOOST: f64 = 25.0;
+/// Score bonus when a query token (>= 3 chars) appears inside the file name.
+const TITLE_CONTAINS_BOOST: f64 = 10.0;
+/// Score bonus when a query token (>= 3 chars) appears in the object path.
+const PATH_CONTAINS_BOOST: f64 = 5.0;
+/// Score bonus when `objects_fts` (title/path/summary) matches directly.
+const OBJECT_FTS_SIGNAL_BOOST: f64 = 4.0;
+/// Additional score per extra matching chunk in the same file (capped).
+const MULTI_CHUNK_STEP_BOOST: f64 = 1.5;
+const MULTI_CHUNK_MAX_BOOST: f64 = 6.0;
+/// Penalty applied to lockfiles and housekeeping noise during search ranking.
+const NOISE_PENALTY: f64 = -10.0;
+
+struct SearchCandidate {
+    hit: SearchHit,
+    is_noise: bool,
+    chunk_hits: usize,
+    matched_object_fts: bool,
+    best_chunk_bm25: Option<f64>,
+    object_bm25: Option<f64>,
+}
+
 impl Store {
     /// Loads full metadata, project binding, and tags for an object by ID, path, or unique title.
     pub fn show_object(&self, id_or_path: &str) -> Result<ObjectDetails, StoreError> {
@@ -61,7 +84,7 @@ impl Store {
         })
     }
 
-    /// Performs full-text BM25 search across `chunks_fts` and `objects_fts`.
+    /// Performs full-text BM25 search across `chunks_fts` and `objects_fts` with deterministic title/path boosts.
     pub fn search(
         &self,
         query: &str,
@@ -69,13 +92,19 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<SearchHit>, StoreError> {
         let fts_query = build_fts_query(query)?;
-        let capped_limit = limit.clamp(1, 200) as i64;
+        let query_terms: Vec<String> = query
+            .split_whitespace()
+            .filter(|t| !t.is_empty())
+            .map(|t| t.to_lowercase())
+            .collect();
 
-        let mut merged: HashMap<String, SearchHit> = HashMap::new();
+        let requested_limit = limit.clamp(1, 200);
+        let pool_limit = (requested_limit * 6).max(60) as i64;
+        let mut merged: HashMap<String, SearchCandidate> = HashMap::new();
 
         {
             let mut stmt = self.conn.prepare(
-                "SELECT o.id, p.name, o.title, o.path, o.kind,
+                "SELECT o.id, p.name, o.title, o.path, o.kind, o.is_noise,
                         snippet(chunks_fts, 0, '[', ']', '...', 24) AS snip,
                         bm25(chunks_fts) AS rank
                  FROM chunks_fts
@@ -89,29 +118,52 @@ impl Store {
                  LIMIT ?3",
             )?;
 
-            let rows = stmt.query_map(params![fts_query, project_name, capped_limit * 2], |row| {
+            let rows = stmt.query_map(params![fts_query, project_name, pool_limit], |row| {
                 let kind_str: String = row.get(4)?;
-                Ok(SearchHit {
-                    object_id: row.get(0)?,
-                    project_name: row.get(1)?,
-                    title: row.get(2)?,
-                    path: row.get(3)?,
-                    kind: ObjectKind::from_db(&kind_str),
-                    snippet: row.get(5)?,
-                    score: row.get(6)?,
-                })
+                let is_noise: i64 = row.get(5)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    ObjectKind::from_db(&kind_str),
+                    is_noise != 0,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, f64>(7)?,
+                ))
             })?;
 
             for row in rows {
-                insert_best_hit(&mut merged, row?);
+                let (id, pname, title, path, kind, is_noise, snippet, bm25_rank) = row?;
+                let entry = merged.entry(id.clone()).or_insert_with(|| SearchCandidate {
+                    hit: SearchHit {
+                        object_id: id,
+                        project_name: pname,
+                        title,
+                        path,
+                        kind,
+                        snippet: snippet.clone(),
+                        score: 0.0,
+                    },
+                    is_noise,
+                    chunk_hits: 0,
+                    matched_object_fts: false,
+                    best_chunk_bm25: None,
+                    object_bm25: None,
+                });
+                entry.chunk_hits += 1;
+                if entry.best_chunk_bm25.is_none_or(|prev| bm25_rank < prev) {
+                    entry.best_chunk_bm25 = Some(bm25_rank);
+                    entry.hit.snippet = snippet;
+                }
             }
         }
 
         {
             let mut stmt = self.conn.prepare(
-                "SELECT o.id, p.name, o.title, o.path, o.kind,
+                "SELECT o.id, p.name, o.title, o.path, o.kind, o.is_noise,
                         snippet(objects_fts, -1, '[', ']', '...', 24) AS snip,
-                        bm25(objects_fts, 3.0, 2.0, 1.0) AS rank
+                        bm25(objects_fts, 10.0, 3.0, 1.0) AS rank
                  FROM objects_fts
                  JOIN objects o ON o.rowid = objects_fts.rowid
                  LEFT JOIN projects p ON p.id = o.project_id
@@ -122,27 +174,57 @@ impl Store {
                  LIMIT ?3",
             )?;
 
-            let rows = stmt.query_map(params![fts_query, project_name, capped_limit], |row| {
+            let rows = stmt.query_map(params![fts_query, project_name, pool_limit], |row| {
                 let kind_str: String = row.get(4)?;
-                Ok(SearchHit {
-                    object_id: row.get(0)?,
-                    project_name: row.get(1)?,
-                    title: row.get(2)?,
-                    path: row.get(3)?,
-                    kind: ObjectKind::from_db(&kind_str),
-                    snippet: row.get(5)?,
-                    score: row.get(6)?,
-                })
+                let is_noise: i64 = row.get(5)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    ObjectKind::from_db(&kind_str),
+                    is_noise != 0,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, f64>(7)?,
+                ))
             })?;
 
             for row in rows {
-                insert_best_hit(&mut merged, row?);
+                let (id, pname, title, path, kind, is_noise, snippet, bm25_rank) = row?;
+                let entry = merged.entry(id.clone()).or_insert_with(|| SearchCandidate {
+                    hit: SearchHit {
+                        object_id: id,
+                        project_name: pname,
+                        title,
+                        path,
+                        kind,
+                        snippet: snippet.clone(),
+                        score: 0.0,
+                    },
+                    is_noise,
+                    chunk_hits: 0,
+                    matched_object_fts: false,
+                    best_chunk_bm25: None,
+                    object_bm25: None,
+                });
+                entry.matched_object_fts = true;
+                entry.object_bm25 = Some(bm25_rank);
+                if entry.hit.snippet.trim().is_empty() {
+                    entry.hit.snippet = snippet;
+                }
             }
         }
 
-        let mut hits: Vec<SearchHit> = merged.into_values().collect();
-        hits.sort_by(|a, b| a.score.total_cmp(&b.score));
-        hits.truncate(limit.clamp(1, 200));
+        let mut hits: Vec<SearchHit> = merged
+            .into_values()
+            .map(|mut cand| {
+                cand.hit.score = score_search_candidate(&cand, &query_terms);
+                cand.hit
+            })
+            .collect();
+
+        hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+        hits.truncate(requested_limit);
         Ok(hits)
     }
 
@@ -202,7 +284,6 @@ impl Store {
             )?
             .collect::<Result<Vec<_>, _>>()?;
 
-        // Rank by activity day first, then human-meaningful kind priority, then exact timestamp.
         recent_objects.sort_by(|a, b| {
             let key_a = (
                 a.modified_at.div_euclid(86_400),
@@ -312,6 +393,61 @@ impl Store {
     }
 }
 
+fn score_search_candidate(cand: &SearchCandidate, query_terms: &[String]) -> f64 {
+    let chunk_bm25_mag = cand.best_chunk_bm25.map(|r| (-r).max(0.0)).unwrap_or(0.0);
+    let obj_bm25_mag = cand.object_bm25.map(|r| (-r).max(0.0)).unwrap_or(0.0);
+    let mut score = chunk_bm25_mag.max(obj_bm25_mag);
+
+    if cand.matched_object_fts {
+        score += OBJECT_FTS_SIGNAL_BOOST;
+    }
+
+    if cand.chunk_hits > 1 {
+        let extra = ((cand.chunk_hits - 1) as f64 * MULTI_CHUNK_STEP_BOOST)
+            .min(MULTI_CHUNK_MAX_BOOST);
+        score += extra;
+    }
+
+    let title_lower = cand.hit.title.to_lowercase();
+    let stem_lower = Path::new(&cand.hit.title)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(str::to_lowercase)
+        .unwrap_or_default();
+    let path_lower = cand.hit.path.to_lowercase();
+
+    let mut exact_title_hit = false;
+    let mut partial_title_hit = false;
+    let mut path_hit = false;
+
+    for term in query_terms {
+        if title_lower == *term || stem_lower == *term {
+            exact_title_hit = true;
+        } else if term.len() >= 3 && title_lower.contains(term) {
+            partial_title_hit = true;
+        }
+        if term.len() >= 3 && path_lower.contains(term) {
+            path_hit = true;
+        }
+    }
+
+    if exact_title_hit {
+        score += TITLE_EXACT_MATCH_BOOST;
+    } else if partial_title_hit {
+        score += TITLE_CONTAINS_BOOST;
+    }
+
+    if path_hit {
+        score += PATH_CONTAINS_BOOST;
+    }
+
+    if cand.is_noise {
+        score += NOISE_PENALTY;
+    }
+
+    score
+}
+
 pub(crate) fn map_project_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
     Ok(Project {
         id: row.get(0)?,
@@ -344,15 +480,6 @@ pub(crate) fn map_object_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Object
     })
 }
 
-fn insert_best_hit(merged: &mut HashMap<String, SearchHit>, hit: SearchHit) {
-    match merged.get(&hit.object_id) {
-        Some(existing) if existing.score <= hit.score => {}
-        _ => {
-            merged.insert(hit.object_id.clone(), hit);
-        }
-    }
-}
-
 fn build_fts_query(raw: &str) -> Result<String, StoreError> {
     let tokens: Vec<String> = raw
         .split_whitespace()
@@ -369,7 +496,6 @@ fn build_fts_query(raw: &str) -> Result<String, StoreError> {
     Ok(tokens.join(" AND "))
 }
 
-
 pub(crate) fn build_fts_or_query(terms: &[String]) -> Option<String> {
     let tokens: Vec<String> = terms
         .iter()
@@ -383,6 +509,7 @@ pub(crate) fn build_fts_or_query(terms: &[String]) -> Option<String> {
         Some(tokens.join(" OR "))
     }
 }
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -440,6 +567,46 @@ mod tests {
         assert_eq!(deleted, 1);
         assert!(store.search("schedule_task", None, 10).unwrap().is_empty());
         assert_eq!(store.project_timeline("ai-os", 10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn exact_title_match_outranks_incidental_chunk_mentions() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("demo", None, None).unwrap();
+
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/src/maturity.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "maturity.rs".to_string(),
+                summary: Some("fn check_roadmap()".to_string()),
+                content_hash: "h1".to_string(),
+                size_bytes: 120,
+                modified_at: 1000,
+                is_noise: false,
+                chunks: vec!["// roadmap roadmap roadmap checklist item".to_string()],
+            })
+            .unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/docs/ROADMAP.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "ROADMAP.md".to_string(),
+                summary: Some("# Project Roadmap".to_string()),
+                content_hash: "h2".to_string(),
+                size_bytes: 80,
+                modified_at: 1000,
+                is_noise: false,
+                chunks: vec!["# Project Roadmap\nPhase 1 milestones.".to_string()],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        let hits = store.search("roadmap", Some("demo"), 5).unwrap();
+        assert_eq!(hits[0].title, "ROADMAP.md");
     }
 
     #[test]
@@ -502,4 +669,3 @@ mod tests {
         assert_eq!(ctx_all.recent_objects.len(), 3);
     }
 }
-

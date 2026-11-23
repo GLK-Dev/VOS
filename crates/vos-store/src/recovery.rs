@@ -11,6 +11,24 @@ use vos_core::{
 use crate::queries::{build_fts_or_query, map_object_row};
 use crate::{Store, StoreError};
 
+/// Score per shared tag between two objects.
+const SHARED_TAG_SCORE: i64 = 40;
+/// Score for residing in the exact same directory as the target object.
+const SAME_DIR_SCORE: i64 = 30;
+/// Score for residing in a sibling module under the same parent folder.
+const NEARBY_MODULE_SCORE: i64 = 15;
+/// Score for objects modified in the same coding session window.
+const SAME_SESSION_SCORE: i64 = 15;
+/// Score when a topic term matches the object title or file stem.
+const RELATED_TITLE_MATCH_SCORE: i64 = 35;
+/// Score when a topic term appears in the object path.
+const RELATED_PATH_MATCH_SCORE: i64 = 20;
+/// Base score for FTS content/object matches, plus rank & multi-chunk bonuses.
+const RELATED_CHUNK_FTS_BASE: i64 = 20;
+const RELATED_OBJECT_FTS_BASE: i64 = 15;
+const RELATED_FTS_RANK_BONUS_MAX: i64 = 15;
+const RELATED_MULTI_CHUNK_BONUS: i64 = 5;
+
 impl Store {
     /// Returns project events within the trailing `days` window, excluding noise by default.
     pub fn project_activity(
@@ -137,7 +155,7 @@ impl Store {
         })
     }
 
-    /// Finds related objects using FTS5 overlap, shared tags, directory proximity, and session timing.
+    /// Finds related objects using rank-aware FTS5 overlap, title/path signals, shared tags, and session timing.
     pub fn find_related(
         &self,
         target: &str,
@@ -168,7 +186,7 @@ impl Store {
     ) -> Result<Vec<RelatedHit>, StoreError> {
         let mut candidates: HashMap<String, CandidateAccum> = HashMap::new();
 
-        // 1. Shared tags (+40 per shared tag)
+        // 1. Shared tags
         let mut tag_stmt = self.conn.prepare(
             "SELECT DISTINCT o.id, p.name, o.title, o.path, o.kind, o.modified_at, t1.tag
              FROM tags t1
@@ -202,12 +220,12 @@ impl Store {
                 path,
                 kind,
                 mod_at,
-                40,
+                SHARED_TAG_SCORE,
                 format!("shared tag '{tag}'"),
             );
         }
 
-        // 2. FTS5 lexical overlap from title stem + tags (+35)
+        // 2. Rank-aware FTS5 overlap from title stem + tags
         let mut terms = extract_title_terms(&src.title);
         for (tag, _) in src_tags {
             if !terms.contains(tag) {
@@ -217,7 +235,7 @@ impl Store {
         terms.truncate(6);
 
         if let Some(fts_query) = build_fts_or_query(&terms) {
-            self.collect_fts_related(&fts_query, Some(&src.id), project_name, 35, &mut candidates)?;
+            self.collect_fts_related(&fts_query, Some(&src.id), project_name, &mut candidates)?;
         }
 
         // 3. Directory proximity & co-activity window within the same project
@@ -269,7 +287,7 @@ impl Store {
                         path.clone(),
                         kind,
                         mod_at,
-                        30,
+                        SAME_DIR_SCORE,
                         "same directory".to_string(),
                     );
                 } else if src_grand.as_deref().is_some()
@@ -283,7 +301,7 @@ impl Store {
                         path.clone(),
                         kind,
                         mod_at,
-                        15,
+                        NEARBY_MODULE_SCORE,
                         "nearby module".to_string(),
                     );
                 }
@@ -300,7 +318,7 @@ impl Store {
                         path,
                         kind,
                         mod_at,
-                        15,
+                        SAME_SESSION_SCORE,
                         "edited in same session".to_string(),
                     );
                 }
@@ -320,10 +338,9 @@ impl Store {
         let terms = extract_title_terms(topic);
 
         if let Some(fts_query) = build_fts_or_query(&terms) {
-            self.collect_fts_related(&fts_query, None, project_name, 45, &mut candidates)?;
+            self.collect_fts_related(&fts_query, None, project_name, &mut candidates)?;
         }
 
-        // Tag & path-segment matches
         let mut obj_stmt = self.conn.prepare(
             "SELECT o.id, p.name, o.title, o.path, o.kind, o.modified_at
              FROM objects o
@@ -346,9 +363,14 @@ impl Store {
 
         for row in rows {
             let (id, pname, title, path, kind, mod_at) = row?;
+            let title_lower = title.to_lowercase();
             let path_lower = path.to_lowercase();
+
             for term in &terms {
-                if term.len() >= 3 && path_lower.contains(term) {
+                if term.len() < 3 {
+                    continue;
+                }
+                if title_lower.contains(term) {
                     add_signal(
                         &mut candidates,
                         id.clone(),
@@ -357,10 +379,22 @@ impl Store {
                         path.clone(),
                         kind,
                         mod_at,
-                        25,
+                        RELATED_TITLE_MATCH_SCORE,
+                        format!("title matches '{term}'"),
+                    );
+                }
+                if path_lower.contains(term) {
+                    add_signal(
+                        &mut candidates,
+                        id.clone(),
+                        pname.clone(),
+                        title.clone(),
+                        path.clone(),
+                        kind,
+                        mod_at,
+                        RELATED_PATH_MATCH_SCORE,
                         format!("path matches '{term}'"),
                     );
-                    break;
                 }
             }
         }
@@ -396,7 +430,7 @@ impl Store {
                     path,
                     kind,
                     mod_at,
-                    40,
+                    SHARED_TAG_SCORE,
                     format!("tagged '{term}'"),
                 );
             }
@@ -410,11 +444,10 @@ impl Store {
         fts_query: &str,
         exclude_id: Option<&str>,
         project_name: Option<&str>,
-        weight: i64,
         candidates: &mut HashMap<String, CandidateAccum>,
     ) -> Result<(), StoreError> {
         let mut chunk_stmt = self.conn.prepare(
-            "SELECT DISTINCT o.id, p.name, o.title, o.path, o.kind, o.modified_at
+            "SELECT o.id, p.name, o.title, o.path, o.kind, o.modified_at
              FROM chunks_fts
              JOIN chunks c ON c.rowid = chunks_fts.rowid
              JOIN objects o ON o.id = c.object_id
@@ -425,32 +458,53 @@ impl Store {
                AND (?2 IS NULL OR o.id != ?2)
                AND (?3 IS NULL OR p.name = ?3)
              ORDER BY bm25(chunks_fts)
-             LIMIT 30",
+             LIMIT 60",
         )?;
-        let chunk_rows = chunk_stmt.query_map(params![fts_query, exclude_id, project_name], |row| {
-            let kind_str: String = row.get(4)?;
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                ObjectKind::from_db(&kind_str),
-                row.get::<_, i64>(5)?,
-            ))
-        })?;
-        for row in chunk_rows {
-            let (id, pname, title, path, kind, mod_at) = row?;
-            add_signal(
-                candidates,
-                id,
-                pname,
-                title,
-                path,
-                kind,
-                mod_at,
-                weight,
-                "content FTS match".to_string(),
-            );
+
+        let chunk_rows = chunk_stmt
+            .query_map(params![fts_query, exclude_id, project_name], |row| {
+                let kind_str: String = row.get(4)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    ObjectKind::from_db(&kind_str),
+                    row.get::<_, i64>(5)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut chunk_seen: HashMap<String, usize> = HashMap::new();
+        for (pos, (id, pname, title, path, kind, mod_at)) in chunk_rows.into_iter().enumerate() {
+            let count = chunk_seen.entry(id.clone()).or_insert(0);
+            *count += 1;
+            if *count == 1 {
+                let rank_bonus = (RELATED_FTS_RANK_BONUS_MAX - (pos as i64 / 2)).max(0);
+                add_signal(
+                    candidates,
+                    id,
+                    pname,
+                    title,
+                    path,
+                    kind,
+                    mod_at,
+                    RELATED_CHUNK_FTS_BASE + rank_bonus,
+                    "content FTS match".to_string(),
+                );
+            } else if *count <= 4 {
+                add_signal(
+                    candidates,
+                    id,
+                    pname,
+                    title,
+                    path,
+                    kind,
+                    mod_at,
+                    RELATED_MULTI_CHUNK_BONUS,
+                    "multiple content matches".to_string(),
+                );
+            }
         }
 
         let mut obj_stmt = self.conn.prepare(
@@ -463,22 +517,25 @@ impl Store {
                AND o.is_noise = 0
                AND (?2 IS NULL OR o.id != ?2)
                AND (?3 IS NULL OR p.name = ?3)
-             ORDER BY bm25(objects_fts, 3.0, 2.0, 1.0)
-             LIMIT 20",
+             ORDER BY bm25(objects_fts, 10.0, 3.0, 1.0)
+             LIMIT 30",
         )?;
-        let obj_rows = obj_stmt.query_map(params![fts_query, exclude_id, project_name], |row| {
-            let kind_str: String = row.get(4)?;
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                ObjectKind::from_db(&kind_str),
-                row.get::<_, i64>(5)?,
-            ))
-        })?;
-        for row in obj_rows {
-            let (id, pname, title, path, kind, mod_at) = row?;
+        let obj_rows = obj_stmt
+            .query_map(params![fts_query, exclude_id, project_name], |row| {
+                let kind_str: String = row.get(4)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    ObjectKind::from_db(&kind_str),
+                    row.get::<_, i64>(5)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        for (pos, (id, pname, title, path, kind, mod_at)) in obj_rows.into_iter().enumerate() {
+            let rank_bonus = (RELATED_FTS_RANK_BONUS_MAX - pos as i64).max(0);
             add_signal(
                 candidates,
                 id,
@@ -487,7 +544,7 @@ impl Store {
                 path,
                 kind,
                 mod_at,
-                weight,
+                RELATED_OBJECT_FTS_BASE + rank_bonus,
                 "title/path FTS match".to_string(),
             );
         }
@@ -749,6 +806,6 @@ mod tests {
         assert!(related[0].reasons.iter().any(|r| r.contains("same directory")));
 
         let by_topic = store.find_related("scheduler", Some("tessera"), 5).unwrap();
-        assert!(!by_topic.is_empty());
+        assert_eq!(by_topic[0].title, "scheduler.rs");
     }
 }
