@@ -157,6 +157,29 @@ pub struct SearchSignal {
 }
 
 /// Ranked full-text search hit across `chunks_fts` and `objects_fts`.
+/// Detected query intent used to weight title, phrase, and architectural document boosts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryIntent {
+    Code,
+    Documentation,
+    Concept,
+}
+
+impl QueryIntent {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Code => "code",
+            Self::Documentation => "documentation",
+            Self::Concept => "concept",
+        }
+    }
+}
+
+impl fmt::Display for QueryIntent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 #[derive(Debug, Clone)]
 pub struct SearchHit {
     pub object_id: String,
@@ -167,6 +190,7 @@ pub struct SearchHit {
     pub is_noise: bool,
     pub snippet: String,
     pub score: f64,
+    pub intent: QueryIntent,
     pub signals: Vec<SearchSignal>,
 }
 
@@ -344,3 +368,5 @@ pub struct BenchmarkRunRecord {
     pub cross_project_total: usize,
     pub created_at: i64,
 }
+
+

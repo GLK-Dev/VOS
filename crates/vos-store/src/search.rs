@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use rusqlite::params;
-use vos_core::{ObjectKind, SearchHit, SearchSignal};
+use vos_core::{ObjectKind, QueryIntent, SearchHit, SearchSignal};
 
+use crate::concepts::{ConceptDictionary, detect_query_intent, is_concept_document};
 use crate::{Store, StoreError};
 
 /// Score bonus when a query token matches the file name or file stem exactly.
@@ -18,6 +19,10 @@ const OBJECT_FTS_SIGNAL_BOOST: f64 = 4.0;
 const ALL_TERMS_MATCH_BOOST: f64 = 12.0;
 /// Bonus when the exact multi-term phrase appears in title, path, summary, or matched chunk.
 const PHRASE_MATCH_BOOST: f64 = 8.0;
+/// Base bonus for architectural/specification documents under concept queries.
+const CONCEPT_DOC_BASE_BOOST: f64 = 8.0;
+/// Bonus when an expanded concept synonym from `config/concepts.yaml` matches.
+const CONCEPT_SYNONYM_BOOST: f64 = 12.0;
 /// Additional score per extra matching chunk in the same file (capped).
 const MULTI_CHUNK_STEP_BOOST: f64 = 1.5;
 const MULTI_CHUNK_MAX_BOOST: f64 = 6.0;
@@ -26,18 +31,26 @@ const NOISE_PENALTY: f64 = -10.0;
 /// Minimum non-noise Stage 1 (AND) hits before triggering Stage 2 (OR) fallback.
 const STAGE2_FALLBACK_MIN_HITS: usize = 3;
 
+#[derive(Clone, Copy)]
+enum StageKind {
+    Stage1And,
+    Stage2Or,
+    ConceptExpansion,
+}
+
 struct SearchCandidate {
     hit: SearchHit,
     chunk_hits: usize,
     matched_object_fts: bool,
     matched_stage1_and: bool,
+    matched_concept_expansion: bool,
     best_chunk_bm25: Option<f64>,
     object_bm25: Option<f64>,
     observed_text_lower: String,
 }
 
 impl Store {
-    /// Two-stage FTS5 search: strict `AND` first, with automatic `OR` fallback on sparse multi-term queries.
+    /// Multi-stage FTS5 search with `AND` -> `OR` fallback, concept expansion, and intent-weighted scoring.
     pub fn search(
         &self,
         query: &str,
@@ -52,24 +65,59 @@ impl Store {
             .collect();
         let phrase_lower = query_terms.join(" ");
 
+        let concepts = ConceptDictionary::load();
+        let intent = detect_query_intent(query, &query_terms, &concepts);
+
         let requested_limit = limit.clamp(1, 200);
         let pool_limit = (requested_limit * 6).max(60) as i64;
         let mut merged: HashMap<String, SearchCandidate> = HashMap::new();
 
-        self.collect_fts_stage(&and_query, project_name, pool_limit, true, &mut merged)?;
+        // Stage 1: strict AND across chunks_fts and objects_fts.
+        self.collect_fts_stage(
+            &and_query,
+            project_name,
+            pool_limit,
+            StageKind::Stage1And,
+            intent,
+            &mut merged,
+        )?;
 
+        // Stage 2: automatic OR fallback on sparse multi-term queries.
         let stage1_clean = merged.values().filter(|c| !c.hit.is_noise).count();
         if query_terms.len() > 1
             && stage1_clean < STAGE2_FALLBACK_MIN_HITS
             && let Some(or_query) = crate::queries::build_fts_or_query(&query_terms)
         {
-            self.collect_fts_stage(&or_query, project_name, pool_limit, false, &mut merged)?;
+            self.collect_fts_stage(
+                &or_query,
+                project_name,
+                pool_limit,
+                StageKind::Stage2Or,
+                intent,
+                &mut merged,
+            )?;
+        }
+
+        // Stage 3: deterministic concept expansion from `config/concepts.yaml`.
+        let synonyms = concepts.lookup(query).unwrap_or(&[]);
+        if !synonyms.is_empty()
+            && let Some(concept_fts) = build_concept_fts_query(synonyms)
+        {
+            self.collect_fts_stage(
+                &concept_fts,
+                project_name,
+                pool_limit,
+                StageKind::ConceptExpansion,
+                intent,
+                &mut merged,
+            )?;
         }
 
         let mut hits: Vec<SearchHit> = merged
             .into_values()
             .map(|mut cand| {
-                let (score, signals) = score_search_candidate(&cand, &query_terms, &phrase_lower);
+                let (score, signals) =
+                    score_search_candidate(&cand, &query_terms, &phrase_lower, intent, synonyms);
                 cand.hit.score = score;
                 cand.hit.signals = signals;
                 cand.hit
@@ -86,9 +134,13 @@ impl Store {
         fts_query: &str,
         project_name: Option<&str>,
         pool_limit: i64,
-        is_stage1_and: bool,
+        stage: StageKind,
+        intent: QueryIntent,
         merged: &mut HashMap<String, SearchCandidate>,
     ) -> Result<(), StoreError> {
+        let is_stage1 = matches!(stage, StageKind::Stage1And);
+        let is_concept = matches!(stage, StageKind::ConceptExpansion);
+
         {
             let mut stmt = self.conn.prepare(
                 "SELECT o.id, p.name, o.title, o.path, o.kind, o.is_noise,
@@ -135,29 +187,39 @@ impl Store {
                         is_noise,
                         snippet: snippet.clone(),
                         score: 0.0,
+                        intent,
                         signals: Vec::new(),
                     },
                     chunk_hits: 0,
                     matched_object_fts: false,
-                    matched_stage1_and: is_stage1_and,
+                    matched_stage1_and: is_stage1,
+                    matched_concept_expansion: is_concept,
                     best_chunk_bm25: None,
                     object_bm25: None,
                     observed_text_lower: String::new(),
                 });
 
-                if is_stage1_and {
+                if is_stage1 {
                     entry.matched_stage1_and = true;
                 }
-                if is_stage1_and || is_new {
+                if is_concept {
+                    entry.matched_concept_expansion = true;
+                }
+                if is_stage1 || is_new {
                     entry.chunk_hits += 1;
                 }
                 if entry.observed_text_lower.len() < 4096 {
                     entry.observed_text_lower.push('\n');
                     entry.observed_text_lower.push_str(&chunk_text.to_lowercase());
                 }
-                if entry.best_chunk_bm25.is_none_or(|prev| bm25_rank < prev) {
+                if entry.best_chunk_bm25.is_none_or(|prev| bm25_rank < prev) && !is_concept {
                     entry.best_chunk_bm25 = Some(bm25_rank);
                     entry.hit.snippet = snippet;
+                } else if entry.best_chunk_bm25.is_none() {
+                    entry.best_chunk_bm25 = Some(bm25_rank);
+                    if entry.hit.snippet.trim().is_empty() {
+                        entry.hit.snippet = snippet;
+                    }
                 }
             }
         }
@@ -206,19 +268,26 @@ impl Store {
                         is_noise,
                         snippet: snippet.clone(),
                         score: 0.0,
+                        intent,
                         signals: Vec::new(),
                     },
                     chunk_hits: 0,
                     matched_object_fts: false,
-                    matched_stage1_and: is_stage1_and,
+                    matched_stage1_and: is_stage1,
+                    matched_concept_expansion: is_concept,
                     best_chunk_bm25: None,
                     object_bm25: None,
                     observed_text_lower: String::new(),
                 });
-                if is_stage1_and {
+                if is_stage1 {
                     entry.matched_stage1_and = true;
                 }
-                entry.matched_object_fts = true;
+                if is_concept {
+                    entry.matched_concept_expansion = true;
+                }
+                if !is_concept {
+                    entry.matched_object_fts = true;
+                }
                 entry.object_bm25 = Some(
                     entry
                         .object_bm25
@@ -242,8 +311,13 @@ fn score_search_candidate(
     cand: &SearchCandidate,
     query_terms: &[String],
     phrase_lower: &str,
+    intent: QueryIntent,
+    synonyms: &[String],
 ) -> (f64, Vec<SearchSignal>) {
     let mut signals = Vec::new();
+    let title_multiplier = if intent == QueryIntent::Concept { 2.0 } else { 1.0 };
+    let phrase_multiplier = if intent == QueryIntent::Concept { 2.0 } else { 1.0 };
+
     let chunk_bm25_mag = cand.best_chunk_bm25.map(|r| (-r).max(0.0)).unwrap_or(0.0);
     let obj_bm25_mag = cand.object_bm25.map(|r| (-r).max(0.0)).unwrap_or(0.0);
 
@@ -308,12 +382,12 @@ fn score_search_candidate(
     if exact_title_hit {
         signals.push(SearchSignal {
             label: "title exact match".to_string(),
-            delta: TITLE_EXACT_MATCH_BOOST,
+            delta: TITLE_EXACT_MATCH_BOOST * title_multiplier,
         });
     } else if partial_title_hit {
         signals.push(SearchSignal {
             label: "title contains term".to_string(),
-            delta: TITLE_CONTAINS_BOOST,
+            delta: TITLE_CONTAINS_BOOST * title_multiplier,
         });
     }
 
@@ -339,9 +413,32 @@ fn score_search_candidate(
         {
             signals.push(SearchSignal {
                 label: "exact phrase match".to_string(),
-                delta: PHRASE_MATCH_BOOST,
+                delta: PHRASE_MATCH_BOOST * phrase_multiplier,
             });
         }
+    }
+
+    if intent == QueryIntent::Concept && is_concept_document(&cand.hit.path, &cand.hit.title) {
+        signals.push(SearchSignal {
+            label: "concept document boost".to_string(),
+            delta: CONCEPT_DOC_BASE_BOOST * 2.0,
+        });
+    }
+
+    if cand.matched_concept_expansion && !synonyms.is_empty() {
+        let matched_syn = synonyms.iter().find(|syn| {
+            title_lower.contains(syn.as_str())
+                || path_lower.contains(syn.as_str())
+                || cand.observed_text_lower.contains(syn.as_str())
+        });
+        let label = match matched_syn {
+            Some(s) => format!("concept expansion ('{s}')"),
+            None => "concept expansion".to_string(),
+        };
+        signals.push(SearchSignal {
+            label,
+            delta: CONCEPT_SYNONYM_BOOST,
+        });
     }
 
     if cand.hit.is_noise {
@@ -369,4 +466,78 @@ fn build_fts_query(raw: &str) -> Result<String, StoreError> {
     }
 
     Ok(tokens.join(" AND "))
+}
+
+fn build_concept_fts_query(synonyms: &[String]) -> Option<String> {
+    let mut clauses = Vec::new();
+    for syn in synonyms {
+        let clean = syn.trim();
+        if clean.is_empty() {
+            continue;
+        }
+        let escaped = clean.replace('"', "\"\"");
+        clauses.push(format!("\"{escaped}\""));
+    }
+    if clauses.is_empty() {
+        None
+    } else {
+        Some(clauses.join(" OR "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use vos_core::ObjectKind;
+
+    use super::*;
+    use crate::UpsertObjectInput;
+
+    #[test]
+    fn concept_expansion_and_concept_doc_boost_surface_spec() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("vos", None, None).unwrap();
+
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/SPEC.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "SPEC.md".to_string(),
+                summary: Some("VOS Project Memory Specification".to_string()),
+                content_hash: "h1".to_string(),
+                size_bytes: 200,
+                modified_at: 1000,
+                is_noise: false,
+                chunks: vec!["Stores chronological events and project timeline entries.".to_string()],
+            })
+            .unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/src/misc.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "misc.rs".to_string(),
+                summary: None,
+                content_hash: "h2".to_string(),
+                size_bytes: 80,
+                modified_at: 1000,
+                is_noise: false,
+                chunks: vec!["// unrelated log output".to_string()],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        let hits = store.search("event log", Some("vos"), 5).unwrap();
+        assert_eq!(hits[0].title, "SPEC.md");
+        assert_eq!(hits[0].intent, QueryIntent::Concept);
+        assert!(hits[0]
+            .signals
+            .iter()
+            .any(|s| s.label == "concept document boost"));
+        assert!(hits[0]
+            .signals
+            .iter()
+            .any(|s| s.label.starts_with("concept expansion")));
+    }
 }

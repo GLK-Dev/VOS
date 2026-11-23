@@ -8,6 +8,7 @@ pub use error::VosError;
 pub use models::{
     ActiveArea, BenchmarkRunRecord, CategoryBenchmarkStats, EventRecord, EventType, ObjectDetails,
     ObjectKind, ObjectRecord, ObjectWhy, Project, ProjectActivity, ProjectContext, ProjectResume,
-    ProjectStart, ProjectSummary, RelatedHit, SearchBenchmarkCase, SearchBenchmarkCaseResult,
+    ProjectStart, ProjectSummary, QueryIntent, RelatedHit, SearchBenchmarkCase, SearchBenchmarkCaseResult,
     SearchBenchmarkReport, SearchHit, SearchSignal,
 };
+

@@ -260,11 +260,12 @@ fn main() -> Result<()> {
                     let proj = hit.project_name.as_deref().unwrap_or("-");
                     if explain {
                         println!(
-                            "{}. {} [{} | project: {} | score: {:.2}]",
+                            "{}. {} [{} | project: {} | intent: {} | score: {:.2}]",
                             idx + 1,
                             hit.title,
                             hit.kind,
                             proj,
+                            hit.intent,
                             hit.score
                         );
                     } else {
@@ -791,7 +792,11 @@ fn main() -> Result<()> {
                 if runs.is_empty() {
                     println!("No benchmark runs saved yet. Run `vos benchmark search --save`.");
                 } else {
-                    for run in runs {
+                    for (idx, run) in runs.iter().enumerate() {
+                        let prev = runs[idx + 1..]
+                            .iter()
+                            .find(|r| r.suite_name == run.suite_name);
+
                         let t1 = if run.top1_total > 0 {
                             format!("{:.1}%", pct(run.top1_passed, run.top1_total))
                         } else {
@@ -802,11 +807,22 @@ fn main() -> Result<()> {
                         } else {
                             "-".to_string()
                         };
+                        let t5_val = pct(run.top5_passed, run.top5_total);
+                        let t5_delta = prev
+                            .filter(|p| p.top5_total > 0 && run.top5_total > 0)
+                            .map(|p| {
+                                let d = t5_val - pct(p.top5_passed, p.top5_total);
+                                format!(" ({d:+.1}%)")
+                            })
+                            .unwrap_or_default();
                         let t5 = if run.top5_total > 0 {
-                            format!("{:.1}%", pct(run.top5_passed, run.top5_total))
+                            format!("{t5_val:.1}%{t5_delta}")
                         } else {
                             "-".to_string()
                         };
+                        let mrr_delta = prev
+                            .map(|p| format!(" ({:+.3})", run.mrr - p.mrr))
+                            .unwrap_or_default();
                         let noise = pct(run.noise_hits, run.total_returned_hits);
                         let cp = if run.cross_project_total > 0 {
                             format!("{:.1}%", pct(run.cross_project_matched, run.cross_project_total))
@@ -814,7 +830,7 @@ fn main() -> Result<()> {
                             "-".to_string()
                         };
                         println!(
-                            "#{} {} | {} ({} q) | T1: {} | T3: {} | T5: {} | MRR: {:.3} | Noise: {:.1}% | Cross: {}",
+                            "#{} {} | {} ({} q) | T1: {} | T3: {} | T5: {} | MRR: {:.3}{} | Noise: {:.1}% | Cross: {}",
                             run.id,
                             format_ts(run.created_at),
                             run.suite_name,
@@ -823,6 +839,7 @@ fn main() -> Result<()> {
                             t3,
                             t5,
                             run.mrr,
+                            mrr_delta,
                             noise,
                             cp
                         );
@@ -890,6 +907,7 @@ fn display_relative<'a>(path: &'a str, root: &str) -> &'a str {
         .filter(|rest| !rest.is_empty())
         .unwrap_or(path)
 }
+
 
 
 

@@ -1,0 +1,56 @@
+# Architectural and domain concept dictionary for deterministic FTS5 query expansion.
+# Loaded from ./config/concepts.yaml when present, with the built-in copy as fallback.
+
+operating system:
+  - vector operating system
+  - system architecture
+  - vos
+  - microkernel
+
+project memory:
+  - project memory system
+  - context recovery
+  - vos resume
+
+context recovery:
+  - project memory
+  - vos resume
+  - vos start
+  - vos context
+
+vector operating system:
+  - vos
+  - project memory system
+
+object model:
+  - objects
+  - objectrecord
+  - schema
+
+event log:
+  - events
+  - timeline
+  - project timeline
+  - audit log
+
+relation graph:
+  - relations
+  - related
+  - vos related
+
+project context:
+  - vos context
+  - project_context
+  - context snapshot
+
+indexing pipeline:
+  - indexing semantics
+  - index_path
+  - vos-indexer
+  - indexer
+
+activity timeline:
+  - vos timeline
+  - vos activity
+  - project_timeline
+  - chronological events

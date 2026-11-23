@@ -29,6 +29,8 @@ To avoid building infrastructure before proving daily utility, v0.1 **must not**
 ```text
 vos/ (repo root)
 ├── Cargo.toml                  # Workspace manifest
+├── config/
+│   └── concepts.yaml           # Architectural concept dictionary
 ├── migrations/
 │   ├── 0001_init.sql           # SQLite schema + FTS5 + triggers + indexes
 │   ├── 0002_noise.sql          # Noise classification column and indexes
@@ -144,6 +146,7 @@ Global flag: `--db <path>` (or `VOS_DB` env var, defaulting to `~/.vos/vos.db`).
 
 - **v0.2 (Validation-driven):** PDF/rich metadata extractors, explicit `relations`, optional local embeddings if FTS5 misses semantic queries.
 - **v0.3 (Automation):** Background daemon (`vosd`) + filesystem watcher (`notify`) + local API.
+
 
 
 
