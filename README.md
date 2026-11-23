@@ -4,6 +4,39 @@ VOS is a local-first **Project Memory System** built on SQLite + FTS5 + determin
 
 See [SPEC.md](SPEC.md) for the canonical specification and [AGENTS.md](AGENTS.md) for engineering rules.
 
+## Project Status
+
+**Version:** VOS v1.0.1
+
+**Status:** Validated & Frozen
+
+### Validation Summary
+
+- 10 real projects indexed
+- 778 active files
+- 20/20 recovery scenarios passed
+- 24/24 tests passing
+- 0 clippy warnings
+
+### Search Benchmark
+
+- Top-1: 100.0%
+- Top-3: 100.0%
+- Top-5: 93.3%
+- Cross-Project Recall: 100.0%
+
+### Current Focus
+
+Recovery Benchmark data collection.
+
+No new features are planned until sufficient Recovery Benchmark data is collected.
+
+### Known Watch Items
+
+- Search quality monitoring on expanded corpus
+- Top-5 drift monitoring
+- MRR monitoring
+
 ## Quick Start
 
 ```bash
