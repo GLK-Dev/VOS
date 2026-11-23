@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use std::fmt;
 
 /// Classification of an indexed filesystem object.
@@ -224,4 +225,56 @@ pub struct RelatedHit {
     pub kind: ObjectKind,
     pub score: i64,
     pub reasons: Vec<String>,
+}
+
+/// Explainable context report returned by `vos why <target>`.
+#[derive(Debug, Clone)]
+pub struct ObjectWhy {
+    pub object: ObjectRecord,
+    pub project_name: Option<String>,
+    pub project_root: Option<String>,
+    pub area: String,
+    pub is_active_area: bool,
+    pub is_starting_point: bool,
+    pub tags: Vec<(String, String)>,
+    pub related: Vec<RelatedHit>,
+    pub recent_events: Vec<EventRecord>,
+}
+
+/// Single search benchmark case loaded from YAML (`tests/search_benchmark.yaml`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct SearchBenchmarkCase {
+    pub query: String,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub expected_top1: Vec<String>,
+    #[serde(default)]
+    pub expected_top3: Vec<String>,
+    #[serde(default)]
+    pub expected_top5: Vec<String>,
+}
+
+/// Outcome of evaluating a single benchmark query.
+#[derive(Debug, Clone)]
+pub struct SearchBenchmarkCaseResult {
+    pub query: String,
+    pub project: Option<String>,
+    pub top1_hit: Option<bool>,
+    pub top3_hit: Option<bool>,
+    pub top5_hit: Option<bool>,
+    pub actual_top5: Vec<String>,
+}
+
+/// Aggregate accuracy report for a search benchmark suite.
+#[derive(Debug, Clone)]
+pub struct SearchBenchmarkReport {
+    pub total_cases: usize,
+    pub top1_passed: usize,
+    pub top1_total: usize,
+    pub top3_passed: usize,
+    pub top3_total: usize,
+    pub top5_passed: usize,
+    pub top5_total: usize,
+    pub cases: Vec<SearchBenchmarkCaseResult>,
 }

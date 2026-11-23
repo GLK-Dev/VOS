@@ -4,8 +4,8 @@ use std::path::Path;
 use rusqlite::params;
 use vos_core::util::now_unix;
 use vos_core::{
-    ActiveArea, EventRecord, EventType, ObjectKind, ObjectRecord, ProjectActivity, ProjectResume,
-    RelatedHit,
+    ActiveArea, EventRecord, EventType, ObjectKind, ObjectRecord, ObjectWhy, ProjectActivity,
+    ProjectResume, RelatedHit,
 };
 
 use crate::queries::{build_fts_or_query, map_object_row};
@@ -155,6 +155,74 @@ impl Store {
         })
     }
 
+
+    /// Explains why an object matters within its project using deterministic signals.
+    pub fn why_object(
+        &self,
+        target: &str,
+        project_name: Option<&str>,
+    ) -> Result<ObjectWhy, StoreError> {
+        let details = self.show_object_scoped(target, project_name)?;
+        let obj = details.object;
+
+        let project = match details.project_name.as_deref() {
+            Some(name) => self.get_project_by_name(name)?,
+            None => None,
+        };
+        let project_root = project.as_ref().and_then(|p| p.root_path.clone());
+        let area = object_area(&obj.path, project_root.as_deref().unwrap_or(""));
+
+        let (is_active_area, is_starting_point) = match details.project_name.as_deref() {
+            Some(name) => {
+                let resume = self.project_resume(name)?;
+                let in_area = resume.most_active_areas.iter().any(|a| a.area == area);
+                let is_start = resume.starting_points.iter().any(|s| s.id == obj.id);
+                (in_area, is_start)
+            }
+            None => (false, false),
+        };
+
+        let related = self.related_to_object(
+            &obj,
+            &details.tags,
+            details.project_name.as_deref(),
+            5,
+        )?;
+
+        let mut ev_stmt = self.conn.prepare(
+            "SELECT id, project_id, object_id, event_type, path, detail, created_at
+             FROM events
+             WHERE object_id = ?1
+             ORDER BY created_at DESC, id DESC
+             LIMIT 5",
+        )?;
+        let recent_events = ev_stmt
+            .query_map(params![obj.id], |row| {
+                let et: String = row.get(3)?;
+                Ok(EventRecord {
+                    id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    object_id: row.get(2)?,
+                    event_type: EventType::from_db(&et),
+                    path: row.get(4)?,
+                    detail: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(ObjectWhy {
+            object: obj,
+            project_name: details.project_name,
+            project_root,
+            area,
+            is_active_area,
+            is_starting_point,
+            tags: details.tags,
+            related,
+            recent_events,
+        })
+    }
     /// Finds related objects using rank-aware FTS5 overlap, title/path signals, shared tags, and session timing.
     pub fn find_related(
         &self,
@@ -623,6 +691,26 @@ fn extract_title_terms(raw: &str) -> Vec<String> {
     out
 }
 
+
+fn object_area(path: &str, root_prefix: &str) -> String {
+    let trimmed_root = root_prefix.trim_end_matches(['/', '\\']);
+    let rel = if !trimmed_root.is_empty() {
+        path.strip_prefix(trimmed_root)
+            .map(|r| r.trim_start_matches(['/', '\\']))
+            .unwrap_or(path)
+    } else {
+        path
+    };
+
+    let parts: Vec<&str> = rel.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+    if parts.len() <= 1 {
+        "(root)".to_string()
+    } else if parts.len() == 2 {
+        parts[0].to_string()
+    } else {
+        format!("{}/{}", parts[0], parts[1])
+    }
+}
 fn compute_active_areas(
     non_noise_objects: &[ObjectRecord],
     root_prefix: &str,
@@ -631,24 +719,9 @@ fn compute_active_areas(
     let mut areas: HashMap<String, (usize, i64)> = HashMap::new();
     let trimmed_root = root_prefix.trim_end_matches(['/', '\\']);
 
+    let _ = trimmed_root;
     for obj in non_noise_objects.iter().take(40) {
-        let rel = if !trimmed_root.is_empty() {
-            obj.path
-                .strip_prefix(trimmed_root)
-                .map(|r| r.trim_start_matches(['/', '\\']))
-                .unwrap_or(&obj.path)
-        } else {
-            obj.path.as_str()
-        };
-
-        let parts: Vec<&str> = rel.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
-        let area = if parts.len() <= 1 {
-            "(root)".to_string()
-        } else if parts.len() == 2 {
-            parts[0].to_string()
-        } else {
-            format!("{}/{}", parts[0], parts[1])
-        };
+        let area = object_area(&obj.path, root_prefix);
 
         let entry = areas.entry(area).or_insert((0, obj.modified_at));
         entry.0 += 1;
@@ -807,5 +880,14 @@ mod tests {
 
         let by_topic = store.find_related("scheduler", Some("tessera"), 5).unwrap();
         assert_eq!(by_topic[0].title, "scheduler.rs");
+
+        let why = store.why_object("scheduler.rs", Some("tessera")).unwrap();
+        assert_eq!(why.project_name.as_deref(), Some("tessera"));
+        assert_eq!(why.area, "repo/kernel");
+        assert!(why.is_active_area);
+        assert!(!why.related.is_empty());
+        assert!(!why.recent_events.is_empty());
     }
 }
+
+

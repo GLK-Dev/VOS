@@ -1,6 +1,7 @@
 //! SQLite persistence, FTS5 search, and project context queries for VOS.
 
 mod batch;
+mod benchmark;
 mod queries;
 mod recovery;
 
@@ -15,6 +16,7 @@ use vos_core::util::{canonicalize_path, is_path_within, new_id, now_unix};
 use vos_core::{EventType, ObjectRecord, Project, ProjectSummary};
 
 pub use batch::{IndexBatch, UpsertObjectInput, UpsertOutcome};
+pub use benchmark::load_benchmark_cases;
 
 const MIGRATIONS: &[(&str, &str)] = &[
     ("0001_init", include_str!("../../../migrations/0001_init.sql")),
@@ -297,4 +299,5 @@ impl Store {
         Ok(details.object)
     }
 }
+
 

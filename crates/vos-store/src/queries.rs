@@ -36,6 +36,15 @@ struct SearchCandidate {
 impl Store {
     /// Loads full metadata, project binding, and tags for an object by ID, path, or unique title.
     pub fn show_object(&self, id_or_path: &str) -> Result<ObjectDetails, StoreError> {
+        self.show_object_scoped(id_or_path, None)
+    }
+
+    /// Loads full metadata for an object, using `project_name` to disambiguate shared titles.
+    pub fn show_object_scoped(
+        &self,
+        id_or_path: &str,
+        project_name: Option<&str>,
+    ) -> Result<ObjectDetails, StoreError> {
         let mut object = self.find_object_by_id_or_path(id_or_path)?;
         if object.is_none() {
             let candidate = Path::new(id_or_path);
@@ -45,7 +54,7 @@ impl Store {
             }
         }
         if object.is_none() {
-            object = self.find_unique_object_by_title(id_or_path)?;
+            object = self.find_object_by_title_or_suffix(id_or_path, project_name)?;
         }
 
         let object =
@@ -373,20 +382,58 @@ impl Store {
             .map_err(StoreError::from)
     }
 
-    fn find_unique_object_by_title(&self, title: &str) -> Result<Option<ObjectRecord>, StoreError> {
+    fn find_object_by_title_or_suffix(
+        &self,
+        target: &str,
+        project_name: Option<&str>,
+    ) -> Result<Option<ObjectRecord>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, path, kind, title, summary, content_hash,
-                    size_bytes, modified_at, indexed_at, is_deleted, deleted_at, is_noise
-             FROM objects
-             WHERE title = ?1 AND is_deleted = 0
-             LIMIT 2",
+            "SELECT o.id, o.project_id, o.path, o.kind, o.title, o.summary, o.content_hash,
+                    o.size_bytes, o.modified_at, o.indexed_at, o.is_deleted, o.deleted_at, o.is_noise
+             FROM objects o
+             LEFT JOIN projects p ON p.id = o.project_id
+             WHERE o.title = ?1
+               AND o.is_deleted = 0
+               AND (?2 IS NULL OR p.name = ?2)
+             LIMIT 5",
         )?;
         let mut matches = stmt
-            .query_map(params![title], map_object_row)?
+            .query_map(params![target, project_name], map_object_row)?
             .collect::<Result<Vec<_>, _>>()?;
 
         if matches.len() == 1 {
-            Ok(matches.pop())
+            return Ok(matches.pop());
+        }
+        if matches.len() > 1 {
+            let paths: Vec<String> = matches.into_iter().map(|m| m.path).collect();
+            return Err(StoreError::InvalidInput(format!(
+                "ambiguous object '{target}', specify --project or path. Matches: {}",
+                paths.join(", ")
+            )));
+        }
+
+        // Also try normalized path suffix match (e.g. `docs/ROADMAP.md` or `transformer/mod.rs`).
+        let norm_target = target.replace('\\', "/").trim_start_matches('/').to_lowercase();
+        let mut all_stmt = self.conn.prepare(
+            "SELECT o.id, o.project_id, o.path, o.kind, o.title, o.summary, o.content_hash,
+                    o.size_bytes, o.modified_at, o.indexed_at, o.is_deleted, o.deleted_at, o.is_noise
+             FROM objects o
+             LEFT JOIN projects p ON p.id = o.project_id
+             WHERE o.is_deleted = 0
+               AND (?1 IS NULL OR p.name = ?1)",
+        )?;
+        let suffix_matches: Vec<ObjectRecord> = all_stmt
+            .query_map(params![project_name], map_object_row)?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|o| {
+                let norm = o.path.replace('\\', "/").to_lowercase();
+                norm == norm_target || norm.ends_with(&format!("/{norm_target}"))
+            })
+            .collect();
+
+        if suffix_matches.len() == 1 {
+            Ok(suffix_matches.into_iter().next())
         } else {
             Ok(None)
         }
@@ -669,3 +716,4 @@ mod tests {
         assert_eq!(ctx_all.recent_objects.len(), 3);
     }
 }
+

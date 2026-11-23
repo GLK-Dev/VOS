@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 use vos_core::util::now_unix;
 use vos_indexer::{IndexOptions, index_path_with_options};
-use vos_store::Store;
+use vos_store::{Store, load_benchmark_cases};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -116,6 +116,29 @@ enum Commands {
         /// Maximum number of related objects to display.
         #[arg(long, default_value_t = 10)]
         limit: usize,
+    },
+    /// Explain why an object matters within its project context.
+    Why {
+        /// Object ID, path, or title.
+        target: String,
+        /// Optional project name to disambiguate shared file names.
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Run quality benchmarks against the current database.
+    Benchmark {
+        #[command(subcommand)]
+        action: BenchmarkCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum BenchmarkCommands {
+    /// Evaluate Top-1/Top-3/Top-5 search accuracy from a YAML suite.
+    Search {
+        /// Path to YAML benchmark file.
+        #[arg(long, default_value = "tests/search_live.yaml")]
+        config: PathBuf,
     },
 }
 
@@ -518,9 +541,126 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Commands::Why { target, project } => {
+            let why = store.why_object(&target, project.as_deref())?;
+            let root_prefix = why.project_root.as_deref().unwrap_or("");
+            let rel_path = display_relative(&why.object.path, root_prefix);
+
+            println!("Object:\n  {} ({})", why.object.title, rel_path);
+            println!(
+                "\nProject:\n  {}",
+                why.project_name.as_deref().unwrap_or("(unassigned)")
+            );
+
+            println!("\nWhy it matters:");
+            println!(
+                "  • Modified {} ({})",
+                format_relative(why.object.modified_at),
+                format_day(why.object.modified_at)
+            );
+            if why.is_starting_point {
+                println!("  • Key project starting point");
+            }
+            if why.is_active_area {
+                println!("  • Located in active area: {}", why.area);
+            } else {
+                println!("  • Located in area: {}", why.area);
+            }
+            if !why.tags.is_empty() {
+                let tag_names: Vec<&str> = why.tags.iter().map(|(t, _)| t.as_str()).collect();
+                println!("  • Tags: {}", tag_names.join(", "));
+            }
+            if !why.related.is_empty() {
+                println!("  • Related files:");
+                for rel in &why.related {
+                    println!(
+                        "    - {} (score: {} | {})",
+                        display_relative(&rel.path, root_prefix),
+                        rel.score,
+                        rel.reasons.join(", ")
+                    );
+                }
+            }
+            if !why.recent_events.is_empty() {
+                println!("  • Recent events:");
+                for ev in &why.recent_events {
+                    let detail = ev
+                        .detail
+                        .as_deref()
+                        .map(|d| format!(" [{d}]"))
+                        .unwrap_or_default();
+                    println!(
+                        "    - {}{} ({})",
+                        ev.event_type,
+                        detail,
+                        format_day(ev.created_at)
+                    );
+                }
+            }
+        }
+        Commands::Benchmark { action } => match action {
+            BenchmarkCommands::Search { config } => {
+                let cases = load_benchmark_cases(&config)?;
+                let report = store.run_search_benchmark(&cases)?;
+
+                for case in &report.cases {
+                    let t1 = case.top1_hit.map(fmt_hit).unwrap_or("-");
+                    let t3 = case.top3_hit.map(fmt_hit).unwrap_or("-");
+                    let t5 = case.top5_hit.map(fmt_hit).unwrap_or("-");
+                    println!(
+                        "query: {:16} | Top-1: {:4} | Top-3: {:4} | Top-5: {:4}",
+                        case.query, t1, t3, t5
+                    );
+                    if case.top1_hit == Some(false)
+                        || case.top3_hit == Some(false)
+                        || case.top5_hit == Some(false)
+                    {
+                        println!("  actual: {}", case.actual_top5.join(", "));
+                    }
+                }
+
+                println!("\nSummary ({} cases):", report.total_cases);
+                if report.top1_total > 0 {
+                    println!(
+                        "  Top-1: {}/{} ({:.0}%)",
+                        report.top1_passed,
+                        report.top1_total,
+                        pct(report.top1_passed, report.top1_total)
+                    );
+                }
+                if report.top3_total > 0 {
+                    println!(
+                        "  Top-3: {}/{} ({:.0}%)",
+                        report.top3_passed,
+                        report.top3_total,
+                        pct(report.top3_passed, report.top3_total)
+                    );
+                }
+                if report.top5_total > 0 {
+                    println!(
+                        "  Top-5: {}/{} ({:.0}%)",
+                        report.top5_passed,
+                        report.top5_total,
+                        pct(report.top5_passed, report.top5_total)
+                    );
+                }
+            }
+        },
     }
 
     Ok(())
+}
+
+fn fmt_hit(ok: bool) -> &'static str {
+    if ok { "PASS" } else { "FAIL" }
+}
+
+fn pct(passed: usize, total: usize) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        (passed as f64 / total as f64) * 100.0
+    }
 }
 
 fn default_db_path() -> PathBuf {
@@ -566,3 +706,4 @@ fn display_relative<'a>(path: &'a str, root: &str) -> &'a str {
         .filter(|rest| !rest.is_empty())
         .unwrap_or(path)
 }
+
