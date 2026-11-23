@@ -6,7 +6,7 @@ use anyhow::Result;
 use chrono::{DateTime, Local};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
-use vos_indexer::index_path;
+use vos_indexer::{IndexOptions, index_path_with_options};
 use vos_store::Store;
 
 #[derive(Debug, Parser)]
@@ -16,9 +16,9 @@ use vos_store::Store;
     about = "VOS — Project Memory System (local index, FTS5 search, context recovery)"
 )]
 struct Cli {
-    /// Path to the VOS SQLite database file.
-    #[arg(long, env = "VOS_DB", default_value = ".vos/vos.db", global = true)]
-    db: PathBuf,
+    /// Path to the VOS SQLite database file (defaults to ~/.vos/vos.db).
+    #[arg(long, env = "VOS_DB", global = true)]
+    db: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Commands,
@@ -38,6 +38,9 @@ enum Commands {
         /// Optional project name to associate indexed objects with.
         #[arg(long)]
         project: Option<String>,
+        /// Include files ignored by .gitignore / .vosignore.
+        #[arg(long)]
+        no_ignore: bool,
     },
     /// Full-text search across indexed objects and chunks.
     Search {
@@ -102,7 +105,8 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let cli = Cli::parse();
-    let mut store = Store::open(&cli.db)?;
+    let db_path = cli.db.unwrap_or_else(default_db_path);
+    let mut store = Store::open(&db_path)?;
 
     match cli.command {
         Commands::Project { action } => match action {
@@ -142,8 +146,13 @@ fn main() -> Result<()> {
                 }
             }
         },
-        Commands::Index { path, project } => {
-            let report = index_path(&mut store, &path, project.as_deref())?;
+        Commands::Index { path, project, no_ignore } => {
+            let report = index_path_with_options(
+                &mut store,
+                &path,
+                project.as_deref(),
+                IndexOptions { no_ignore },
+            )?;
             println!(
                 "Indexed {} file(s): added={}, modified={}, restored={}, unchanged={}, deleted={}, skipped={}",
                 report.scanned,
@@ -301,4 +310,13 @@ fn display_relative<'a>(path: &'a str, root: &str) -> &'a str {
         .map(|rest| rest.trim_start_matches(['/', '\\']))
         .filter(|rest| !rest.is_empty())
         .unwrap_or(path)
+}
+
+fn default_db_path() -> PathBuf {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"));
+    match home {
+        Some(dir) => PathBuf::from(dir).join(".vos").join("vos.db"),
+        None => PathBuf::from(".vos").join("vos.db"),
+    }
 }

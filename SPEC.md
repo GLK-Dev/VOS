@@ -106,7 +106,7 @@ Soft-deleted objects (`is_deleted = 1`) are filtered out in search queries (`WHE
 
 Running `vos index <path>` must be **idempotent**:
 
-1. Walk `<path>` while skipping ignored directories (`.git`, `target`, `node_modules`, `.venv`, `__pycache__`, `dist`, `build`, `.vos`).
+1. Walk `<path>` while respecting `.gitignore` / `.vosignore` (unless `--no-ignore`) and skipping ignored directories (`.git`, `.cargo`, `target`, `node_modules`, `.venv`, `__pycache__`, `dist`, `.vos`).
 2. Classify each file (`code`, `note`, `doc`, `model`, `media`, `other`).
 3. Compute SHA-256 `content_hash` and `modified_at`.
 4. If the path exists in `objects` with the same `content_hash` and `is_deleted = 0`, skip re-chunking.
@@ -126,7 +126,7 @@ Running `vos index <path>` must be **idempotent**:
 - `vos context <project>`
 - `vos timeline <project> [--limit <n>]`
 
-Global flag: `--db <path>` (or `VOS_DB` env var, defaulting to `./.vos/vos.db` or user data dir).
+Global flag: `--db <path>` (or `VOS_DB` env var, defaulting to `~/.vos/vos.db`).
 
 ---
 
@@ -134,3 +134,4 @@ Global flag: `--db <path>` (or `VOS_DB` env var, defaulting to `./.vos/vos.db` o
 
 - **v0.2 (Validation-driven):** PDF/rich metadata extractors, explicit `relations`, optional local embeddings if FTS5 misses semantic queries.
 - **v0.3 (Automation):** Background daemon (`vosd`) + filesystem watcher (`notify`) + local API.
+

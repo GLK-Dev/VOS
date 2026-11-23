@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -111,6 +111,43 @@ pub fn sha256_file(path: &Path) -> Result<String, VosError> {
     Ok(hex)
 }
 
+
+const FAST_FINGERPRINT_THRESHOLD: u64 = 16 * 1024 * 1024;
+const SAMPLE_WINDOW_BYTES: usize = 64 * 1024;
+
+/// Computes a deterministic content fingerprint: full SHA-256 up to 16 MiB,
+/// or a fast sampled SHA-256 (size + head/middle/tail 64 KiB windows) for larger blobs.
+pub fn fingerprint_file(path: &Path, size_bytes: u64) -> Result<String, VosError> {
+    if size_bytes <= FAST_FINGERPRINT_THRESHOLD {
+        return sha256_file(path);
+    }
+
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    hasher.update(size_bytes.to_le_bytes());
+
+    let mut buf = vec![0_u8; SAMPLE_WINDOW_BYTES];
+    let offsets = [
+        0_u64,
+        size_bytes / 2,
+        size_bytes.saturating_sub(SAMPLE_WINDOW_BYTES as u64),
+    ];
+
+    for offset in offsets {
+        file.seek(SeekFrom::Start(offset))?;
+        let n = file.read(&mut buf)?;
+        hasher.update(&buf[..n]);
+    }
+
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(5 + digest.len() * 2);
+    hex.push_str("fast:");
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut hex, "{byte:02x}");
+    }
+    Ok(hex)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,3 +169,4 @@ mod tests {
         assert!(!is_path_within("/work/vos2/src/lib.rs", "/work/vos"));
     }
 }
+

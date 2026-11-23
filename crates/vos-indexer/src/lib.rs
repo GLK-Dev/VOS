@@ -6,24 +6,24 @@ use std::io::Read;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
+use ignore::WalkBuilder;
 use thiserror::Error;
 use tracing::{info, warn};
 use vos_core::VosError;
-use vos_core::util::{canonicalize_path, classify_path, sha256_file};
+use vos_core::util::{canonicalize_path, classify_path, fingerprint_file};
 use vos_store::{Store, StoreError, UpsertObjectInput, UpsertOutcome};
-use walkdir::{DirEntry, WalkDir};
 
 const MAX_TEXT_BYTES: u64 = 2 * 1024 * 1024;
 const CHUNK_CHAR_LIMIT: usize = 1000;
 const IGNORED_DIRS: &[&str] = &[
     ".git",
+    ".cargo",
     "target",
     "node_modules",
     ".venv",
     "venv",
     "__pycache__",
     "dist",
-    "build",
     ".vos",
     ".idea",
     ".vscode",
@@ -42,6 +42,13 @@ pub enum IndexerError {
     Io(#[from] std::io::Error),
 }
 
+/// Options controlling directory traversal during `index_path`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct IndexOptions {
+    /// When true, ignores `.gitignore` / `.vosignore` rules (hard-ignored dirs still apply).
+    pub no_ignore: bool,
+}
+
 /// Summary counters produced by `index_path`.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct IndexReport {
@@ -54,11 +61,21 @@ pub struct IndexReport {
     pub skipped: usize,
 }
 
-/// Scans `root` and idempotently synchronizes objects, chunks, and deletions into `store`.
+/// Scans `root` with default options and idempotently synchronizes into `store`.
 pub fn index_path(
     store: &mut Store,
     root: &Path,
     project_name: Option<&str>,
+) -> Result<IndexReport, IndexerError> {
+    index_path_with_options(store, root, project_name, IndexOptions::default())
+}
+
+/// Scans `root` and idempotently synchronizes objects, chunks, and deletions into `store`.
+pub fn index_path_with_options(
+    store: &mut Store,
+    root: &Path,
+    project_name: Option<&str>,
+    options: IndexOptions,
 ) -> Result<IndexReport, IndexerError> {
     let canonical_root = canonicalize_path(root)?;
     let explicit_project_id = match project_name {
@@ -71,17 +88,38 @@ pub fn index_path(
         None => None,
     };
 
-    info!(root = %canonical_root, project = ?project_name, "starting indexing run");
+    info!(root = %canonical_root, project = ?project_name, no_ignore = options.no_ignore, "starting indexing run");
 
     let mut report = IndexReport::default();
     let mut seen_paths = HashSet::new();
 
-    let walker = WalkDir::new(&canonical_root)
+    let mut builder = WalkBuilder::new(&canonical_root);
+    builder
+        .hidden(false)
         .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| !is_ignored_dir(entry));
+        .parents(!options.no_ignore)
+        .ignore(!options.no_ignore)
+        .git_ignore(!options.no_ignore)
+        .git_global(!options.no_ignore)
+        .git_exclude(!options.no_ignore)
+        .require_git(false);
 
-    for entry_result in walker {
+    if !options.no_ignore {
+        builder.add_custom_ignore_filename(".vosignore");
+    }
+
+    builder.filter_entry(|entry| {
+        let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
+        if !is_dir {
+            return true;
+        }
+        entry
+            .file_name()
+            .to_str()
+            .is_none_or(|name| !IGNORED_DIRS.contains(&name))
+    });
+
+    for entry_result in builder.build() {
         let entry = match entry_result {
             Ok(e) => e,
             Err(err) => {
@@ -91,7 +129,7 @@ pub fn index_path(
             }
         };
 
-        if !entry.file_type().is_file() {
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
             continue;
         }
 
@@ -124,10 +162,10 @@ pub fn index_path(
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
-        let content_hash = match sha256_file(path) {
+        let content_hash = match fingerprint_file(path, size_bytes) {
             Ok(h) => h,
             Err(err) => {
-                warn!(path = %canonical_file, error = %err, "failed to hash file");
+                warn!(path = %canonical_file, error = %err, "failed to fingerprint file");
                 report.skipped += 1;
                 continue;
             }
@@ -197,16 +235,6 @@ pub fn index_path(
     );
 
     Ok(report)
-}
-
-fn is_ignored_dir(entry: &DirEntry) -> bool {
-    if !entry.file_type().is_dir() {
-        return false;
-    }
-    entry
-        .file_name()
-        .to_str()
-        .is_some_and(|name| IGNORED_DIRS.contains(&name))
 }
 
 fn read_utf8_text(path: &Path) -> Option<String> {
@@ -345,12 +373,10 @@ mod tests {
         assert_eq!(second.unchanged, 2);
         assert_eq!(second.added, 0);
 
-        // Search finds newly indexed Rust code.
         let hits = store.search("round robin", Some("demo"), 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].title, "scheduler.rs");
 
-        // Modify one file and remove another.
         fs::write(
             proj_dir.join("src/scheduler.rs"),
             "pub fn schedule_task() {\n    // priority queue scheduler\n}\n",
@@ -373,5 +399,31 @@ mod tests {
         assert_eq!(ctx.active_objects, 1);
         assert_eq!(ctx.deleted_objects, 1);
         assert_eq!(ctx.recent_events.len(), 4);
+    }
+
+    #[test]
+    fn indexer_respects_vosignore_and_no_ignore_flag() {
+        let tmp = TempDir::new().unwrap();
+        let proj_dir = tmp.path().join("ign");
+        fs::create_dir_all(proj_dir.join("out")).unwrap();
+        fs::write(proj_dir.join(".vosignore"), "out/\n").unwrap();
+        fs::write(proj_dir.join("main.rs"), "fn main() {}").unwrap();
+        fs::write(proj_dir.join("out/build.bin"), "binary").unwrap();
+
+        let mut store = Store::open_in_memory().unwrap();
+        store.create_project("ign", Some(&proj_dir), None).unwrap();
+
+        let r1 = index_path(&mut store, &proj_dir, Some("ign")).unwrap();
+        assert_eq!(r1.scanned, 2); // .vosignore + main.rs
+
+        let r2 = index_path_with_options(
+            &mut store,
+            &proj_dir,
+            Some("ign"),
+            IndexOptions { no_ignore: true },
+        )
+        .unwrap();
+        assert_eq!(r2.scanned, 3);
+        assert_eq!(r2.added, 1);
     }
 }

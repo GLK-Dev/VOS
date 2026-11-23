@@ -10,7 +10,8 @@ thiserror.workspace = true
 tracing.workspace = true
 vos-core.workspace = true
 vos-store.workspace = true
-walkdir.workspace = true
+ignore.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+

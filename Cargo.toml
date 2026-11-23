@@ -26,4 +26,5 @@ uuid = { version = "1.11", features = ["v4"] }
 vos-core = { path = "crates/vos-core" }
 vos-indexer = { path = "crates/vos-indexer" }
 vos-store = { path = "crates/vos-store" }
-walkdir = "2.5"
+ignore = "0.4"
+
