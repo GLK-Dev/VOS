@@ -5,8 +5,9 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use chrono::{DateTime, Local, NaiveDate, TimeZone};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
+use vos_core::{GraphDirection, GraphTreeNode};
 use vos_core::util::now_unix;
 use vos_indexer::{IndexOptions, index_path_with_options};
 use vos_store::{Store, load_benchmark_cases};
@@ -171,11 +172,45 @@ enum Commands {
         #[arg(long)]
         project: Option<String>,
     },
+    /// Display deterministic file dependency graph for a project or file.
+    Graph {
+        /// Project name.
+        project: String,
+        /// Optional target file (ID, path, or unique title) to root the graph on.
+        #[arg(long)]
+        target: Option<String>,
+        /// Traversal direction (`out`, `in`, or `both`).
+        #[arg(long, value_enum, default_value_t = CliGraphDirection::Out)]
+        direction: CliGraphDirection,
+        /// Maximum traversal depth (1..=5).
+        #[arg(long, default_value_t = 2)]
+        depth: usize,
+        /// Maximum number of top hub nodes when `--target` is omitted.
+        #[arg(long, default_value_t = 8)]
+        limit: usize,
+    },
     /// Run quality benchmarks against the current database.
     Benchmark {
         #[command(subcommand)]
         action: BenchmarkCommands,
     },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliGraphDirection {
+    Out,
+    In,
+    Both,
+}
+
+impl From<CliGraphDirection> for GraphDirection {
+    fn from(value: CliGraphDirection) -> Self {
+        match value {
+            CliGraphDirection::Out => Self::Outgoing,
+            CliGraphDirection::In => Self::Incoming,
+            CliGraphDirection::Both => Self::Both,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -280,6 +315,7 @@ fn main() -> Result<()> {
             );
             println!("Unchanged: {}", report.unchanged);
             println!("Deleted:   {}", report.deleted);
+            println!("Relations: {}", report.relations);
             if report.skipped > 0 {
                 println!("Skipped:   {}", report.skipped);
             }
@@ -970,6 +1006,26 @@ fn main() -> Result<()> {
                 let tag_names: Vec<&str> = why.tags.iter().map(|(t, _)| t.as_str()).collect();
                 println!("  • Tags: {}", tag_names.join(", "));
             }
+            if !why.outgoing_relations.is_empty() {
+                println!("  • Dependencies:");
+                for edge in why.outgoing_relations.iter().take(6) {
+                    println!(
+                        "    - {} [{}]",
+                        display_relative(&edge.to_path, root_prefix),
+                        edge.relation_type
+                    );
+                }
+            }
+            if !why.incoming_relations.is_empty() {
+                println!("  • Referenced by:");
+                for edge in why.incoming_relations.iter().take(6) {
+                    println!(
+                        "    - {} [{}]",
+                        display_relative(&edge.from_path, root_prefix),
+                        edge.relation_type
+                    );
+                }
+            }
             if !why.related.is_empty() {
                 println!("  • Related files:");
                 for rel in &why.related {
@@ -995,6 +1051,70 @@ fn main() -> Result<()> {
                         detail,
                         format_day(ev.created_at)
                     );
+                }
+            }
+        }
+        Commands::Graph {
+            project,
+            target,
+            direction,
+            depth,
+            limit,
+        } => {
+            let graph = store.project_graph(
+                &project,
+                target.as_deref(),
+                direction.into(),
+                depth,
+                limit,
+            )?;
+            let root_prefix = graph.project.root_path.as_deref().unwrap_or("");
+
+            if let Some(ref target_obj) = graph.target {
+                let target_rel = display_relative(&target_obj.path, root_prefix);
+                let hub = &graph.hubs[0];
+                println!(
+                    "Graph: {} | {} (out: {}, in: {}, depth: {})",
+                    graph.project.name,
+                    target_rel,
+                    hub.outgoing_count,
+                    hub.incoming_count,
+                    graph.depth
+                );
+            } else {
+                println!(
+                    "Graph: {} ({} relations across {} files, direction: {})",
+                    graph.project.name,
+                    graph.total_relations,
+                    graph.connected_objects,
+                    graph.direction
+                );
+            }
+
+            if graph.hubs.is_empty() {
+                println!("\n(no deterministic relations indexed; run `vos index` on the project)");
+            } else {
+                for hub in &graph.hubs {
+                    let hub_rel = display_relative(&hub.object.path, root_prefix);
+                    println!(
+                        "\n{} (out: {}, in: {})",
+                        hub_rel, hub.outgoing_count, hub.incoming_count
+                    );
+                    if !hub.outgoing.is_empty() {
+                        if matches!(graph.direction, GraphDirection::Both) {
+                            println!("  [outgoing]");
+                        }
+                        render_graph_tree(&hub.outgoing, root_prefix, "", false);
+                    }
+                    if !hub.incoming.is_empty() {
+                        if matches!(graph.direction, GraphDirection::Both) {
+                            println!("  [incoming]");
+                        }
+                        render_graph_tree(&hub.incoming, root_prefix, "", true);
+                    }
+                    if hub.outgoing.is_empty() && hub.incoming.is_empty() {
+                        println!("  (no edges in selected direction)");
+                    }
                 }
             }
         }
@@ -1240,3 +1360,29 @@ fn parse_since_arg(raw: &str) -> Result<i64> {
     Ok(local_dt.timestamp())
 }
 
+
+fn render_graph_tree(
+    nodes: &[GraphTreeNode],
+    root_prefix: &str,
+    prefix: &str,
+    is_incoming: bool,
+) {
+    for (idx, node) in nodes.iter().enumerate() {
+        let is_last = idx + 1 == nodes.len();
+        let branch = if is_last { "└─" } else { "├─" };
+        let rel_path = display_relative(&node.object.path, root_prefix);
+        let arrow = if is_incoming { "<- " } else { "" };
+        println!(
+            "{prefix}{branch} {arrow}{rel_path} [{}]",
+            node.relation_type
+        );
+        if !node.children.is_empty() {
+            let child_prefix = if is_last {
+                format!("{prefix}   ")
+            } else {
+                format!("{prefix}│  ")
+            };
+            render_graph_tree(&node.children, root_prefix, &child_prefix, is_incoming);
+        }
+    }
+}

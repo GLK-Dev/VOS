@@ -207,3 +207,63 @@ fn cli_disambiguates_shared_filenames_by_project_flag() {
     let scoped = assert_vos_ok(&db, &["why", "README.md", "--project", "a"]);
     assert!(scoped.contains("Project:\n  a"));
 }
+
+#[test]
+fn cli_builds_and_queries_dependency_graph() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("engine");
+    fs::create_dir_all(proj.join("src/transformer")).unwrap();
+    fs::create_dir_all(proj.join("docs")).unwrap();
+
+    fs::write(
+        proj.join("README.md"),
+        "# Engine\nSee [Design](docs/DESIGN.md).\n",
+    )
+    .unwrap();
+    fs::write(proj.join("docs/DESIGN.md"), "# Design\nDetails for `kv_cache.rs`.\n").unwrap();
+    fs::write(proj.join("src/lib.rs"), "pub mod transformer;\n").unwrap();
+    fs::write(
+        proj.join("src/transformer/mod.rs"),
+        "pub mod kv_cache;\npub mod attention;\n",
+    )
+    .unwrap();
+    fs::write(proj.join("src/transformer/kv_cache.rs"), "pub struct Kv;\n").unwrap();
+    fs::write(
+        proj.join("src/transformer/attention.rs"),
+        "use super::kv_cache;\n",
+    )
+    .unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "engine", proj.to_str().unwrap()]);
+    let idx_out = assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "engine"]);
+    assert!(idx_out.contains("Relations:"));
+
+    let graph_out = assert_vos_ok(&db, &["graph", "engine"]);
+    assert!(graph_out.contains("Graph: engine"));
+    assert!(graph_out.contains("transformer"));
+
+    let focused = assert_vos_ok(
+        &db,
+        &[
+            "graph",
+            "engine",
+            "--target",
+            "transformer/mod.rs",
+            "--direction",
+            "both",
+            "--depth",
+            "2",
+        ],
+    );
+    assert!(focused.contains("kv_cache.rs [rust_mod]"));
+    assert!(focused.contains("attention.rs [rust_mod]"));
+    assert!(focused.contains("lib.rs [rust_mod]"));
+
+    let why_out = assert_vos_ok(
+        &db,
+        &["why", "transformer/mod.rs", "--project", "engine"],
+    );
+    assert!(why_out.contains("Dependencies:"));
+    assert!(why_out.contains("Referenced by:"));
+}

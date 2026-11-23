@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use rusqlite::{OptionalExtension, Transaction, params};
 use tracing::debug;
 use vos_core::util::{is_path_within, new_id};
-use vos_core::{EventType, ObjectKind};
+use vos_core::{EventType, ObjectKind, RelationType};
 
 use crate::StoreError;
 
@@ -29,6 +29,25 @@ pub enum UpsertOutcome {
     Modified(String),
     Restored(String),
     Unchanged(String),
+}
+
+impl UpsertOutcome {
+    /// Returns the indexed object ID regardless of outcome variant.
+    pub fn object_id(&self) -> &str {
+        match self {
+            Self::Added(id) | Self::Modified(id) | Self::Restored(id) | Self::Unchanged(id) => id,
+        }
+    }
+}
+
+/// Deterministic directed dependency edge input written during `vos index`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelationInput {
+    pub from_object_id: String,
+    pub to_object_id: String,
+    pub relation_type: RelationType,
+    pub confidence: f64,
+    pub detail: Option<String>,
 }
 
 /// Single-transaction batch handle used by the indexer to avoid per-file commits.
@@ -206,6 +225,11 @@ impl<'conn> IndexBatch<'conn> {
                     .prepare_cached("UPDATE objects SET is_deleted = 1, deleted_at = ?1 WHERE id = ?2")?;
                 upd.execute(params![self.now, obj_id])?;
 
+                let mut del_rel = self
+                    .tx
+                    .prepare_cached("DELETE FROM relations WHERE from_id = ?1 OR to_id = ?1")?;
+                del_rel.execute(params![obj_id])?;
+
                 insert_event(
                     &self.tx,
                     obj_project_id.as_deref(),
@@ -221,6 +245,44 @@ impl<'conn> IndexBatch<'conn> {
         }
 
         Ok(deleted_count)
+    }
+
+    /// Atomically replaces outgoing deterministic relations for all scanned objects.
+    pub fn sync_relations(
+        &mut self,
+        scanned_object_ids: &[String],
+        relations: &[RelationInput],
+    ) -> Result<usize, StoreError> {
+        {
+            let mut del_stmt = self
+                .tx
+                .prepare_cached("DELETE FROM relations WHERE from_id = ?1")?;
+            for from_id in scanned_object_ids {
+                del_stmt.execute(params![from_id])?;
+            }
+        }
+
+        let mut ins_stmt = self.tx.prepare_cached(
+            "INSERT OR REPLACE INTO relations (from_id, to_id, relation_type, confidence, detail)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+
+        let mut inserted = 0_usize;
+        for rel in relations {
+            if rel.from_object_id == rel.to_object_id {
+                continue;
+            }
+            ins_stmt.execute(params![
+                rel.from_object_id,
+                rel.to_object_id,
+                rel.relation_type.as_str(),
+                rel.confidence,
+                rel.detail,
+            ])?;
+            inserted += 1;
+        }
+
+        Ok(inserted)
     }
 
     /// Commits all indexed object updates, chunk replacements, and events atomically.

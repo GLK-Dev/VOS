@@ -5,6 +5,7 @@ mod benchmark;
 mod concepts;
 mod decision;
 mod evolution;
+mod graph;
 mod queries;
 mod recovery;
 mod search;
@@ -19,13 +20,15 @@ use vos_core::VosError;
 use vos_core::util::{canonicalize_path, is_path_within, new_id, now_unix};
 use vos_core::{EventType, ObjectRecord, Project, ProjectSummary};
 
-pub use batch::{IndexBatch, UpsertObjectInput, UpsertOutcome};
+pub use batch::{IndexBatch, RelationInput, UpsertObjectInput, UpsertOutcome};
 pub use benchmark::load_benchmark_cases;
+pub use graph::ActiveObjectRef;
 
 const MIGRATIONS: &[(&str, &str)] = &[
     ("0001_init", include_str!("../../../migrations/0001_init.sql")),
     ("0002_noise", include_str!("../../../migrations/0002_noise.sql")),
     ("0003_benchmark_history", include_str!("../../../migrations/0003_benchmark_history.sql")),
+    ("0004_relations", include_str!("../../../migrations/0004_relations.sql")),
 ];
 
 /// Errors returned by the SQLite store layer.

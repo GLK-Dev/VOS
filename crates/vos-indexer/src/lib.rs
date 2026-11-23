@@ -1,6 +1,8 @@
 //! Deterministic directory walker, text extractor, and single-transaction batch indexer for VOS.
 
-use std::collections::HashSet;
+mod relations;
+
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -10,8 +12,12 @@ use ignore::WalkBuilder;
 use thiserror::Error;
 use tracing::{info, warn};
 use vos_core::VosError;
-use vos_core::util::{canonicalize_path, classify_path, fingerprint_file, is_noise_path};
-use vos_store::{Store, StoreError, UpsertObjectInput, UpsertOutcome};
+use vos_core::util::{
+    canonicalize_path, classify_path, fingerprint_file, is_noise_path, is_path_within,
+};
+use vos_store::{ActiveObjectRef, Store, StoreError, UpsertObjectInput, UpsertOutcome};
+
+use relations::{RawRef, ScannedObjectRefs, extract_refs, resolve_relations};
 
 const MAX_TEXT_BYTES: u64 = 2 * 1024 * 1024;
 const CHUNK_CHAR_LIMIT: usize = 1000;
@@ -59,6 +65,7 @@ pub struct IndexReport {
     pub unchanged: usize,
     pub deleted: usize,
     pub skipped: usize,
+    pub relations: usize,
     pub elapsed: Duration,
 }
 
@@ -95,6 +102,7 @@ pub fn index_path_with_options(
     let mut report = IndexReport::default();
     let mut seen_paths = HashSet::new();
     let mut inputs = Vec::new();
+    let mut raw_refs_by_path: Vec<(String, Vec<RawRef>)> = Vec::new();
 
     let mut builder = WalkBuilder::new(&canonical_root);
     builder
@@ -183,18 +191,21 @@ pub fn index_path_with_options(
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| canonical_file.clone());
 
-        let (summary, chunks) = if !is_noise && kind.is_text_indexable() && size_bytes <= MAX_TEXT_BYTES {
-            match read_utf8_text(path) {
-                Some(text) => {
-                    let sum = extract_summary(&text);
-                    let ch = chunk_text(&text, CHUNK_CHAR_LIMIT);
-                    (sum, ch)
+        let (summary, chunks, extracted_refs) =
+            if !is_noise && kind.is_text_indexable() && size_bytes <= MAX_TEXT_BYTES {
+                match read_utf8_text(path) {
+                    Some(text) => {
+                        let sum = extract_summary(&text);
+                        let ch = chunk_text(&text, CHUNK_CHAR_LIMIT);
+                        let refs = extract_refs(path, kind, &text);
+                        (sum, ch, refs)
+                    }
+                    None => (None, Vec::new(), Vec::new()),
                 }
-                None => (None, Vec::new()),
-            }
-        } else {
-            (None, Vec::new())
-        };
+            } else {
+                (None, Vec::new(), Vec::new())
+            };
+        raw_refs_by_path.push((canonical_file.clone(), extracted_refs));
 
         let project_id = match explicit_project_id {
             Some(ref pid) => Some(pid.clone()),
@@ -215,13 +226,68 @@ pub fn index_path_with_options(
         });
     }
 
+    let project_roots: HashMap<String, String> = store
+        .list_projects()?
+        .into_iter()
+        .filter_map(|summary| {
+            summary
+                .project
+                .root_path
+                .map(|root| (summary.project.id, root))
+        })
+        .collect();
+
+    let mut active_lookup_map: HashMap<String, ActiveObjectRef> =
+        store
+            .list_active_object_paths(explicit_project_id.as_deref())?
+            .into_iter()
+            .filter(|entry| {
+                !is_path_within(&entry.path, &canonical_root) || seen_paths.contains(&entry.path)
+            })
+            .map(|entry| (entry.path.clone(), entry))
+            .collect();
+
+    let mut refs_lookup: HashMap<String, Vec<RawRef>> = raw_refs_by_path.into_iter().collect();
+
     let mut batch = store.begin_index_batch()?;
+    let mut scanned_refs = Vec::with_capacity(inputs.len());
+    let mut scanned_ids = Vec::with_capacity(inputs.len());
+
     for input in inputs {
-        match batch.upsert_object(input)? {
+        let path = input.path.clone();
+        let project_id = input.project_id.clone();
+        let kind = input.kind;
+        let title = input.title.clone();
+        let is_noise = input.is_noise;
+
+        let outcome = batch.upsert_object(input)?;
+        let object_id = outcome.object_id().to_string();
+        match outcome {
             UpsertOutcome::Added(_) => report.added += 1,
             UpsertOutcome::Modified(_) => report.modified += 1,
             UpsertOutcome::Restored(_) => report.restored += 1,
             UpsertOutcome::Unchanged(_) => report.unchanged += 1,
+        }
+
+        if !is_noise {
+            active_lookup_map.insert(
+                path.clone(),
+                ActiveObjectRef {
+                    id: object_id.clone(),
+                    path: path.clone(),
+                    kind,
+                    title,
+                    project_id: project_id.clone(),
+                },
+            );
+            let raw_refs = refs_lookup.remove(&path).unwrap_or_default();
+            scanned_ids.push(object_id.clone());
+            scanned_refs.push(ScannedObjectRefs {
+                object_id,
+                project_id,
+                path,
+                raw_refs,
+            });
         }
     }
 
@@ -230,6 +296,10 @@ pub fn index_path_with_options(
         explicit_project_id.as_deref(),
         &seen_paths,
     )?;
+
+    let active_objects: Vec<_> = active_lookup_map.into_values().collect();
+    let relations = resolve_relations(&scanned_refs, &active_objects, &project_roots);
+    report.relations = batch.sync_relations(&scanned_ids, &relations)?;
     batch.commit()?;
     report.elapsed = started.elapsed();
 
@@ -435,5 +505,87 @@ mod tests {
         .unwrap();
         assert_eq!(r2.scanned, 3);
         assert_eq!(r2.added, 1);
+    }
+}
+
+#[cfg(test)]
+mod relation_indexing_tests {
+    use std::fs;
+
+    use tempfile::TempDir;
+    use vos_core::GraphDirection;
+    use vos_store::Store;
+
+    use super::*;
+
+    #[test]
+    fn indexes_deterministic_relations_idempotently_and_handles_deletions() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("rustapp");
+        fs::create_dir_all(root.join("src/transformer")).unwrap();
+        fs::create_dir_all(root.join("docs")).unwrap();
+
+        fs::write(
+            root.join("README.md"),
+            "# RustApp\nRead [Architecture](docs/ARCH.md) and check `kv_cache.rs`.\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("docs/ARCH.md"),
+            "# Architecture\nCore entry: [lib.rs](../src/lib.rs).\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub mod transformer;\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/transformer/mod.rs"),
+            "pub mod kv_cache;\npub mod layer;\nuse crate::transformer::layer::Layer;\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/transformer/kv_cache.rs"),
+            "use super::layer;\npub struct KvCache;\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/transformer/layer.rs"),
+            "pub struct Layer;\n",
+        )
+        .unwrap();
+
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .create_project("rustapp", Some(root.as_path()), None)
+            .unwrap();
+
+        let first = index_path(&mut store, &root, Some("rustapp")).unwrap();
+        assert_eq!(first.added, 6);
+        assert!(first.relations >= 6);
+
+        let graph = store
+            .project_graph("rustapp", Some("transformer/mod.rs"), GraphDirection::Both, 2, 5)
+            .unwrap();
+        assert_eq!(graph.hubs[0].outgoing_count, 3); // mod kv_cache, mod layer, use layer
+        assert_eq!(graph.hubs[0].incoming_count, 1); // src/lib.rs
+
+        // Re-indexing without changes is 100% idempotent with no extra events or duplicate edges.
+        let second = index_path(&mut store, &root, Some("rustapp")).unwrap();
+        assert_eq!(second.added, 0);
+        assert_eq!(second.modified, 0);
+        assert_eq!(second.unchanged, 6);
+        assert_eq!(second.relations, first.relations);
+
+        // Removing layer.rs cleans up all edges pointing to it.
+        fs::remove_file(root.join("src/transformer/layer.rs")).unwrap();
+        let third = index_path(&mut store, &root, Some("rustapp")).unwrap();
+        assert_eq!(third.deleted, 1);
+
+        let graph_after = store
+            .project_graph("rustapp", Some("transformer/mod.rs"), GraphDirection::Outgoing, 2, 5)
+            .unwrap();
+        assert_eq!(graph_after.hubs[0].outgoing_count, 1);
     }
 }

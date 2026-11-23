@@ -282,6 +282,8 @@ pub struct ObjectWhy {
     pub is_starting_point: bool,
     pub tags: Vec<(String, String)>,
     pub related: Vec<RelatedHit>,
+    pub outgoing_relations: Vec<GraphEdge>,
+    pub incoming_relations: Vec<GraphEdge>,
     pub recent_events: Vec<EventRecord>,
 }
 
@@ -497,3 +499,121 @@ pub struct ProjectDrift {
     pub findings: Vec<DriftFinding>,
 }
 
+
+/// Deterministic dependency edge type stored in `relations`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RelationType {
+    RustMod,
+    RustUse,
+    MdLink,
+    PathRef,
+}
+
+impl RelationType {
+    /// Returns the canonical lowercase string stored in SQLite.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::RustMod => "rust_mod",
+            Self::RustUse => "rust_use",
+            Self::MdLink => "md_link",
+            Self::PathRef => "path_ref",
+        }
+    }
+
+    /// Parses a stored relation type string, falling back to `PathRef`.
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "rust_mod" => Self::RustMod,
+            "rust_use" => Self::RustUse,
+            "md_link" => Self::MdLink,
+            _ => Self::PathRef,
+        }
+    }
+
+    /// Default deterministic confidence associated with each edge source.
+    pub fn default_confidence(&self) -> f64 {
+        match self {
+            Self::RustMod => 1.0,
+            Self::MdLink => 0.95,
+            Self::RustUse => 0.90,
+            Self::PathRef => 0.75,
+        }
+    }
+}
+
+impl fmt::Display for RelationType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Traversal direction for `vos graph`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphDirection {
+    Outgoing,
+    Incoming,
+    Both,
+}
+
+impl GraphDirection {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Outgoing => "outgoing",
+            Self::Incoming => "incoming",
+            Self::Both => "both",
+        }
+    }
+}
+
+impl fmt::Display for GraphDirection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Directed deterministic dependency edge between two indexed objects.
+#[derive(Debug, Clone)]
+pub struct GraphEdge {
+    pub from_object_id: String,
+    pub to_object_id: String,
+    pub from_path: String,
+    pub to_path: String,
+    pub from_title: String,
+    pub to_title: String,
+    pub relation_type: RelationType,
+    pub confidence: f64,
+    pub detail: Option<String>,
+}
+
+/// Recursive node in a dependency tree rendered by `vos graph`.
+#[derive(Debug, Clone)]
+pub struct GraphTreeNode {
+    pub object: ObjectRecord,
+    pub relation_type: RelationType,
+    pub confidence: f64,
+    pub detail: Option<String>,
+    pub direction: GraphDirection,
+    pub children: Vec<GraphTreeNode>,
+}
+
+/// Root or hub entry inside a `ProjectGraph` report.
+#[derive(Debug, Clone)]
+pub struct GraphHub {
+    pub object: ObjectRecord,
+    pub outgoing_count: usize,
+    pub incoming_count: usize,
+    pub outgoing: Vec<GraphTreeNode>,
+    pub incoming: Vec<GraphTreeNode>,
+}
+
+/// Deterministic project dependency graph returned by `vos graph`.
+#[derive(Debug, Clone)]
+pub struct ProjectGraph {
+    pub project: Project,
+    pub total_relations: usize,
+    pub connected_objects: usize,
+    pub target: Option<ObjectRecord>,
+    pub direction: GraphDirection,
+    pub depth: usize,
+    pub hubs: Vec<GraphHub>,
+}

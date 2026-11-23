@@ -4,9 +4,9 @@ use std::path::Path;
 use rusqlite::params;
 use vos_core::util::now_unix;
 use vos_core::{
-    ActiveArea, ContinueSuggestion, EventRecord, EventType, ObjectKind, ObjectRecord, ObjectWhy,
-    ProjectActivity,
-    ProjectContinue, ProjectResume, ProjectStart, RelatedHit,
+    ActiveArea, ContinueSuggestion, EventRecord, EventType, GraphDirection, ObjectKind,
+    ObjectRecord, ObjectWhy, ProjectActivity, ProjectContinue, ProjectResume, ProjectStart,
+    RelatedHit, RelationType,
 };
 
 use crate::queries::{build_fts_or_query, map_object_row};
@@ -188,17 +188,25 @@ impl Store {
             });
         }
 
-        // 2. Most recent active code file not already included
+        // 2. Most recent active code file not already included (enriched by dependency degree)
         if let Some(code_obj) = resume
             .recently_modified
             .iter()
             .find(|o| o.kind == ObjectKind::Code && !seen_ids.contains(&o.id))
         {
             let area = object_area(&code_obj.path, root_prefix);
+            let incoming_cnt = self
+                .object_relations(&code_obj.id, GraphDirection::Incoming)?
+                .len();
+            let reason = if incoming_cnt > 0 {
+                format!("latest code activity (area: {area}, {incoming_cnt} incoming refs)")
+            } else {
+                format!("latest code activity (area: {area})")
+            };
             seen_ids.insert(code_obj.id.clone());
             continue_from.push(ContinueSuggestion {
                 object: code_obj.clone(),
-                reason: format!("latest code activity (area: {area})"),
+                reason,
             });
         }
 
@@ -326,6 +334,9 @@ impl Store {
             None => (false, false),
         };
 
+        let outgoing_relations = self.object_relations(&obj.id, GraphDirection::Outgoing)?;
+        let incoming_relations = self.object_relations(&obj.id, GraphDirection::Incoming)?;
+
         let related = self.related_to_object(
             &obj,
             &details.tags,
@@ -364,6 +375,8 @@ impl Store {
             is_starting_point,
             tags: details.tags,
             related,
+            outgoing_relations,
+            incoming_relations,
             recent_events,
         })
     }
@@ -382,7 +395,7 @@ impl Store {
         }
 
         let capped_limit = limit.clamp(1, 50);
-        if let Ok(details) = self.show_object(trimmed) {
+        if let Ok(details) = self.show_object_scoped(trimmed, project_name) {
             return self.related_to_object(&details.object, &details.tags, project_name, capped_limit);
         }
 
@@ -397,6 +410,48 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<RelatedHit>, StoreError> {
         let mut candidates: HashMap<String, CandidateAccum> = HashMap::new();
+
+        // 0. Deterministic dependency graph edges (outgoing + incoming)
+        let mut graph_stmt = self.conn.prepare(
+            "SELECT CASE WHEN r.from_id = ?1 THEN r.to_id ELSE r.from_id END AS neighbor_id,
+                    CASE WHEN r.from_id = ?1 THEN 1 ELSE 0 END AS is_outgoing,
+                    o.id, p.name, o.title, o.path, o.kind, o.modified_at, r.relation_type
+             FROM relations r
+             JOIN objects o ON o.id = CASE WHEN r.from_id = ?1 THEN r.to_id ELSE r.from_id END
+             LEFT JOIN projects p ON p.id = o.project_id
+             WHERE (r.from_id = ?1 OR r.to_id = ?1)
+               AND o.is_deleted = 0
+               AND o.is_noise = 0
+               AND (?2 IS NULL OR p.name = ?2)",
+        )?;
+        let graph_rows = graph_stmt.query_map(params![src.id, project_name], |row| {
+            let kind_str: String = row.get(6)?;
+            let rel_str: String = row.get(8)?;
+            Ok((
+                row.get::<_, i64>(1)? != 0,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                ObjectKind::from_db(&kind_str),
+                row.get::<_, i64>(7)?,
+                RelationType::from_db(&rel_str),
+            ))
+        })?;
+        for row in graph_rows {
+            let (is_out, id, pname, title, path, kind, mod_at, rel_type) = row?;
+            let (score, reason) = match (rel_type, is_out) {
+                (RelationType::RustMod, true) => (60, "module dependency (rust_mod)".to_string()),
+                (RelationType::RustMod, false) => (60, "module parent (rust_mod)".to_string()),
+                (RelationType::MdLink, true) => (55, "linked document (md_link)".to_string()),
+                (RelationType::MdLink, false) => (55, "referenced in docs (md_link)".to_string()),
+                (RelationType::RustUse, true) => (50, "imports module (rust_use)".to_string()),
+                (RelationType::RustUse, false) => (50, "imported by (rust_use)".to_string()),
+                (RelationType::PathRef, true) => (35, "references file (path_ref)".to_string()),
+                (RelationType::PathRef, false) => (35, "referenced by (path_ref)".to_string()),
+            };
+            add_signal(&mut candidates, id, pname, title, path, kind, mod_at, score, reason);
+        }
 
         // 1. Shared tags
         let mut tag_stmt = self.conn.prepare(

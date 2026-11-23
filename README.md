@@ -6,16 +6,16 @@ See [SPEC.md](SPEC.md) for the canonical specification and [AGENTS.md](AGENTS.md
 
 ## Project Status
 
-**Version:** VOS v1.0.1
+**Version:** VOS v1.1.0 (Insight Layer — Priority 1)
 
-**Status:** Validated & Frozen
+**Status:** Active Development (`Project Dependency Graph` shipped; Priorities 2-5 planned)
 
 ### Validation Summary
 
 - 10 real projects indexed
 - 778 active files
 - 20/20 recovery scenarios passed
-- 24/24 tests passing
+- 28/28 tests passing
 - 0 clippy warnings
 
 ### Search Benchmark
@@ -62,6 +62,8 @@ vos changed-since 2026-11-01 my-app
 vos search "scheduler" --explain
 vos why scheduler_fairness.rs
 vos related scheduler
+vos graph my-app
+vos graph my-app --target src/lib.rs --direction both
 vos explain "project context"
 vos benchmark search --config tests/search_live.yaml --save
 vos benchmark history
