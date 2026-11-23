@@ -158,6 +158,13 @@ pub struct SearchSignal {
 
 /// Ranked full-text search hit across `chunks_fts` and `objects_fts`.
 /// Detected query intent used to weight title, phrase, and architectural document boosts.
+/// Controls default ranking visibility for search infrastructure/config artifacts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchVisibility {
+    Normal,
+    Internal,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryIntent {
     Code,
@@ -274,6 +281,22 @@ pub struct ObjectWhy {
     pub recent_events: Vec<EventRecord>,
 }
 
+/// Actionable entry point with a short rationale for `vos continue`.
+#[derive(Debug, Clone)]
+pub struct ContinueSuggestion {
+    pub object: ObjectRecord,
+    pub reason: String,
+}
+
+/// Combined resume + activity + explainable kickoff briefing for `vos continue <project>`.
+#[derive(Debug, Clone)]
+pub struct ProjectContinue {
+    pub resume: ProjectResume,
+    pub continue_from: Vec<ContinueSuggestion>,
+    pub recent_events: Vec<EventRecord>,
+    pub open_questions: Vec<String>,
+}
+/// Combined daily-launch briefing returned by os start <project>.
 /// Combined daily-launch briefing returned by `vos start <project>`.
 #[derive(Debug, Clone)]
 pub struct ProjectStart {
@@ -368,5 +391,9 @@ pub struct BenchmarkRunRecord {
     pub cross_project_total: usize,
     pub created_at: i64,
 }
+
+
+
+
 
 

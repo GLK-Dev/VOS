@@ -57,6 +57,9 @@ enum Commands {
         /// Show scoring signals explaining why each hit ranked where it did.
         #[arg(long)]
         explain: bool,
+        /// Do not penalize internal search/benchmark configs (e.g. config/*.yaml, tests/*.yaml).
+        #[arg(long)]
+        include_internal: bool,
     },
     /// Show detailed metadata and tags for an object.
     Show {
@@ -106,6 +109,11 @@ enum Commands {
     },
     /// Unified project kickoff view (resume + recent activity + open questions).
     Start {
+        /// Project name.
+        project: String,
+    },
+    /// Actionable continuation briefing combining resume, activity, and why.
+    Continue {
         /// Project name.
         project: String,
     },    /// Summarize where work stopped and suggest starting points to resume a project.
@@ -251,8 +259,9 @@ fn main() -> Result<()> {
             project,
             limit,
             explain,
+            include_internal,
         } => {
-            let hits = store.search(&query, project.as_deref(), limit)?;
+            let hits = store.search_with_options(&query, project.as_deref(), limit, include_internal)?;
             if hits.is_empty() {
                 println!("No matches found for \"{query}\".");
             } else {
@@ -495,7 +504,69 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Start { project } => {
+        Commands::Continue { project } => {
+            let cont = store.project_continue(&project)?;
+            let res = &cont.resume;
+            let root_prefix = res.project.root_path.as_deref().unwrap_or("");
+            println!("Project: {} ({} active objects)", res.project.name, res.active_objects);
+
+            println!("\nLast activity:");
+            match res.last_activity_at {
+                Some(ts) => println!("  {} ({})", format_relative(ts), format_day(ts)),
+                None => println!("  never"),
+            }
+
+            println!("\nContinue from:");
+            if cont.continue_from.is_empty() {
+                println!("  (none)");
+            } else {
+                for (idx, item) in cont.continue_from.iter().enumerate() {
+                    println!(
+                        "  {}. {} — {}",
+                        idx + 1,
+                        display_relative(&item.object.path, root_prefix),
+                        item.reason
+                    );
+                }
+            }
+
+            println!("\nRecent changes:");
+            if res.recently_modified.is_empty() {
+                println!("  (none)");
+            } else {
+                for obj in &res.recently_modified {
+                    println!(
+                        "  - [{}] {} ({})",
+                        obj.kind,
+                        display_relative(&obj.path, root_prefix),
+                        format_day(obj.modified_at)
+                    );
+                }
+            }
+
+            println!("\nMost active areas:");
+            if res.most_active_areas.is_empty() {
+                println!("  (none)");
+            } else {
+                for area in &res.most_active_areas {
+                    println!(
+                        "  - {} ({} recent files, last {})",
+                        area.area,
+                        area.object_count,
+                        format_day(area.latest_modified_at)
+                    );
+                }
+            }
+
+            println!("\nOpen questions:");
+            if cont.open_questions.is_empty() {
+                println!("  (none tracked)");
+            } else {
+                for q in &cont.open_questions {
+                    println!("  - {q}");
+                }
+            }
+        }        Commands::Start { project } => {
             let start = store.project_start(&project)?;
             let res = &start.resume;
             let root_prefix = res.project.root_path.as_deref().unwrap_or("");
@@ -907,6 +978,7 @@ fn display_relative<'a>(path: &'a str, root: &str) -> &'a str {
         .filter(|rest| !rest.is_empty())
         .unwrap_or(path)
 }
+
 
 
 

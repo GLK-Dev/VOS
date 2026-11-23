@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use rusqlite::params;
-use vos_core::{ObjectKind, QueryIntent, SearchHit, SearchSignal};
+use vos_core::util::search_visibility;
+use vos_core::{ObjectKind, QueryIntent, SearchHit, SearchSignal, SearchVisibility};
 
 use crate::concepts::{ConceptDictionary, detect_query_intent, is_concept_document};
 use crate::{Store, StoreError};
@@ -28,6 +29,8 @@ const MULTI_CHUNK_STEP_BOOST: f64 = 1.5;
 const MULTI_CHUNK_MAX_BOOST: f64 = 6.0;
 /// Penalty applied to lockfiles and housekeeping noise during search ranking.
 const NOISE_PENALTY: f64 = -10.0;
+/// Penalty applied to internal search/benchmark config files unless --include-internal is passed.
+const INTERNAL_ARTIFACT_PENALTY: f64 = -20.0;
 /// Minimum non-noise Stage 1 (AND) hits before triggering Stage 2 (OR) fallback.
 const STAGE2_FALLBACK_MIN_HITS: usize = 3;
 
@@ -56,6 +59,17 @@ impl Store {
         query: &str,
         project_name: Option<&str>,
         limit: usize,
+    ) -> Result<Vec<SearchHit>, StoreError> {
+        self.search_with_options(query, project_name, limit, false)
+    }
+
+    /// Multi-stage FTS5 search with optional inclusion of internal search/benchmark artifacts.
+    pub fn search_with_options(
+        &self,
+        query: &str,
+        project_name: Option<&str>,
+        limit: usize,
+        include_internal: bool,
     ) -> Result<Vec<SearchHit>, StoreError> {
         let and_query = build_fts_query(query)?;
         let query_terms: Vec<String> = query
@@ -117,7 +131,7 @@ impl Store {
             .into_values()
             .map(|mut cand| {
                 let (score, signals) =
-                    score_search_candidate(&cand, &query_terms, &phrase_lower, intent, synonyms);
+                    score_search_candidate(&cand, &query_terms, &phrase_lower, intent, synonyms, include_internal);
                 cand.hit.score = score;
                 cand.hit.signals = signals;
                 cand.hit
@@ -313,6 +327,7 @@ fn score_search_candidate(
     phrase_lower: &str,
     intent: QueryIntent,
     synonyms: &[String],
+    include_internal: bool,
 ) -> (f64, Vec<SearchSignal>) {
     let mut signals = Vec::new();
     let title_multiplier = if intent == QueryIntent::Concept { 2.0 } else { 1.0 };
@@ -441,6 +456,13 @@ fn score_search_candidate(
         });
     }
 
+    if !include_internal && search_visibility(Path::new(&cand.hit.path)) == SearchVisibility::Internal {
+        signals.push(SearchSignal {
+            label: "internal artifact penalty".to_string(),
+            delta: INTERNAL_ARTIFACT_PENALTY,
+        });
+    }
+
     if cand.hit.is_noise {
         signals.push(SearchSignal {
             label: "noise penalty".to_string(),
@@ -540,4 +562,53 @@ mod tests {
             .iter()
             .any(|s| s.label.starts_with("concept expansion")));
     }
+
+    #[test]
+    fn internal_artifacts_are_penalized_unless_include_internal_is_set() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("vos", None, None).unwrap();
+
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/config/concepts.yaml".to_string(),
+                kind: ObjectKind::Code,
+                title: "concepts.yaml".to_string(),
+                summary: Some("event log: audit log".to_string()),
+                content_hash: "h_cfg".to_string(),
+                size_bytes: 60,
+                modified_at: 1000,
+                is_noise: false,
+                chunks: vec!["event log:\n  - audit log\n  - event stream".to_string()],
+            })
+            .unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/SPEC.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "SPEC.md".to_string(),
+                summary: Some("Event log architecture".to_string()),
+                content_hash: "h_spec".to_string(),
+                size_bytes: 120,
+                modified_at: 1000,
+                is_noise: false,
+                chunks: vec!["Event log and chronological timeline.".to_string()],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        let normal = store.search("event log", Some("vos"), 5).unwrap();
+        assert_eq!(normal[0].title, "SPEC.md");
+
+        let diag = store
+            .search_with_options("event log", Some("vos"), 5, true)
+            .unwrap();
+        assert!(!diag.iter().any(|h| h
+            .signals
+            .iter()
+            .any(|s| s.label == "internal artifact penalty")));
+    }
 }
+

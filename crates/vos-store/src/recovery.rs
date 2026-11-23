@@ -4,8 +4,9 @@ use std::path::Path;
 use rusqlite::params;
 use vos_core::util::now_unix;
 use vos_core::{
-    ActiveArea, EventRecord, EventType, ObjectKind, ObjectRecord, ObjectWhy, ProjectActivity,
-    ProjectResume, ProjectStart, RelatedHit,
+    ActiveArea, ContinueSuggestion, EventRecord, EventType, ObjectKind, ObjectRecord, ObjectWhy,
+    ProjectActivity,
+    ProjectContinue, ProjectResume, ProjectStart, RelatedHit,
 };
 
 use crate::queries::{build_fts_or_query, map_object_row};
@@ -157,6 +158,72 @@ impl Store {
 
 
 
+
+    /// Builds an actionable continuation briefing (`resume + activity + why`) for `vos continue`.
+    pub fn project_continue(&self, project_name: &str) -> Result<ProjectContinue, StoreError> {
+        let start = self.project_start(project_name)?;
+        let resume = start.resume;
+        let root_prefix = resume.project.root_path.as_deref().unwrap_or("");
+
+        let mut continue_from = Vec::new();
+        let mut seen_ids = HashSet::new();
+
+        // 1. Primary anchor document (e.g., ROADMAP.md / SPEC.md / README.md)
+        for sp in &resume.starting_points {
+            if continue_from.len() >= 2 {
+                break;
+            }
+            let area = object_area(&sp.path, root_prefix);
+            let reason = if sp.title.eq_ignore_ascii_case("roadmap.md")
+                || sp.title.eq_ignore_ascii_case("spec.md")
+            {
+                format!("key roadmap/spec entry point (area: {area})")
+            } else {
+                format!("project entry point (area: {area})")
+            };
+            seen_ids.insert(sp.id.clone());
+            continue_from.push(ContinueSuggestion {
+                object: sp.clone(),
+                reason,
+            });
+        }
+
+        // 2. Most recent active code file not already included
+        if let Some(code_obj) = resume
+            .recently_modified
+            .iter()
+            .find(|o| o.kind == ObjectKind::Code && !seen_ids.contains(&o.id))
+        {
+            let area = object_area(&code_obj.path, root_prefix);
+            seen_ids.insert(code_obj.id.clone());
+            continue_from.push(ContinueSuggestion {
+                object: code_obj.clone(),
+                reason: format!("latest code activity (area: {area})"),
+            });
+        }
+
+        // 3. Fill up to 4 with top remaining recently modified items
+        for obj in &resume.recently_modified {
+            if continue_from.len() >= 4 {
+                break;
+            }
+            if !seen_ids.contains(&obj.id) {
+                let area = object_area(&obj.path, root_prefix);
+                seen_ids.insert(obj.id.clone());
+                continue_from.push(ContinueSuggestion {
+                    object: obj.clone(),
+                    reason: format!("recently modified {} (area: {area})", obj.kind),
+                });
+            }
+        }
+
+        Ok(ProjectContinue {
+            resume,
+            continue_from,
+            recent_events: start.recent_events,
+            open_questions: start.open_questions,
+        })
+    }
     /// Builds a unified project kickoff briefing combining resume, recent activity, and open markers.
     pub fn project_start(&self, project_name: &str) -> Result<ProjectStart, StoreError> {
         let resume = self.project_resume(project_name)?;
@@ -966,6 +1033,7 @@ mod tests {
         assert!(!why.recent_events.is_empty());
     }
 }
+
 
 
 

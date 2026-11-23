@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::error::VosError;
-use crate::models::ObjectKind;
+use crate::models::{ObjectKind, SearchVisibility};
 
 /// Returns the current Unix timestamp in seconds.
 pub fn now_unix() -> i64 {
@@ -173,6 +173,22 @@ pub fn is_noise_path(path: &Path) -> bool {
             | "flake.lock"
     )
 }
+
+/// Classifies internal search/benchmark configuration artifacts separately from project knowledge.
+pub fn search_visibility(path: &Path) -> SearchVisibility {
+    let norm = path.to_string_lossy().replace('\\', "/").to_lowercase();
+    let is_yaml = norm.ends_with(".yaml") || norm.ends_with(".yml");
+
+    if (norm.contains("/config/") && is_yaml)
+        || (norm.contains("/tests/") && is_yaml)
+        || norm.contains("/benchmarks/")
+        || norm.contains("/tests/fixtures/")
+    {
+        SearchVisibility::Internal
+    } else {
+        SearchVisibility::Normal
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,6 +217,23 @@ mod tests {
         assert!(!is_noise_path(Path::new("/repo/Cargo.toml")));
         assert!(!is_noise_path(Path::new("/repo/ROADMAP.md")));
     }
+
+    #[test]
+    fn visibility_marks_search_configs_and_benchmarks_internal() {
+        assert_eq!(
+            search_visibility(Path::new("/repo/config/concepts.yaml")),
+            SearchVisibility::Internal
+        );
+        assert_eq!(
+            search_visibility(Path::new("/repo/tests/search_live.yaml")),
+            SearchVisibility::Internal
+        );
+        assert_eq!(
+            search_visibility(Path::new("/repo/SPEC.md")),
+            SearchVisibility::Normal
+        );
+    }
 }
+
 
 

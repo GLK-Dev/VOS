@@ -125,13 +125,14 @@ Running `vos index <path>` must be **idempotent**:
 - `vos project create <name> <path> [--description <text>]`
 - `vos project list`
 - `vos index <path> [--project <name>]`
-- `vos search <query> [--project <name>] [--limit <n>] [--explain]`
+- `vos search <query> [--project <name>] [--limit <n>] [--explain] [--include-internal]`
 - `vos show <id_or_path>`
 - `vos tag <id_or_path> <tags...>`
 - `vos context <project> [--limit <n>] [--include-noise]`
 - `vos timeline <project> [--limit <n>] [--flat]`
 - `vos activity <project> [--days <n>] [--include-noise]`
 - `vos start <project>`
+- `vos continue <project>`
 - `vos resume <project>`
 - `vos related <target> [--project <name>] [--limit <n>]`
 - `vos why <target> [--project <name>]`
@@ -146,6 +147,7 @@ Global flag: `--db <path>` (or `VOS_DB` env var, defaulting to `~/.vos/vos.db`).
 
 - **v0.2 (Validation-driven):** PDF/rich metadata extractors, explicit `relations`, optional local embeddings if FTS5 misses semantic queries.
 - **v0.3 (Automation):** Background daemon (`vosd`) + filesystem watcher (`notify`) + local API.
+
 
 
 
