@@ -4,6 +4,7 @@ mod batch;
 mod benchmark;
 mod concepts;
 mod decision;
+mod evolution;
 mod queries;
 mod recovery;
 mod search;
@@ -303,6 +304,7 @@ impl Store {
         Ok(details.object)
     }
 }
+
 
 
 

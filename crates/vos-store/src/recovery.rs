@@ -836,7 +836,7 @@ fn extract_title_terms(raw: &str) -> Vec<String> {
 }
 
 
-fn object_area(path: &str, root_prefix: &str) -> String {
+pub(crate) fn object_area(path: &str, root_prefix: &str) -> String {
     let trimmed_root = root_prefix.trim_end_matches(['/', '\\']);
     let rel = if !trimmed_root.is_empty() {
         path.strip_prefix(trimmed_root)
@@ -1033,6 +1033,7 @@ mod tests {
         assert!(!why.recent_events.is_empty());
     }
 }
+
 
 
 

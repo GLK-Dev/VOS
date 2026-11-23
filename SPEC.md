@@ -136,6 +136,8 @@ Running `vos index <path>` must be **idempotent**:
 - `vos status <project>`
 - `vos explain <concept> [--project <name>]`
 - `vos changed-since <date> [project]`
+- `vos evolution <project> [--since <date_or_Nd>]`
+- `vos drift <project>`
 - `vos resume <project>`
 - `vos related <target> [--project <name>] [--limit <n>]`
 - `vos why <target> [--project <name>]`
@@ -150,6 +152,7 @@ Global flag: `--db <path>` (or `VOS_DB` env var, defaulting to `~/.vos/vos.db`).
 
 - **v0.2 (Validation-driven):** PDF/rich metadata extractors, explicit `relations`, optional local embeddings if FTS5 misses semantic queries.
 - **v0.3 (Automation):** Background daemon (`vosd`) + filesystem watcher (`notify`) + local API.
+
 
 
 

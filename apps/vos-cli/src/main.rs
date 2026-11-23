@@ -107,7 +107,19 @@ enum Commands {
         #[arg(long)]
         include_noise: bool,
     },
-    /// Decision-support health, pending work, and risk summary for a project.
+    /// Summarize how a project evolved since a given date or relative window (default: 30d).
+    Evolution {
+        /// Project name.
+        project: String,
+        /// Cutoff date (`YYYY-MM-DD`) or relative days (`30d`).
+        #[arg(long, default_value = "30d")]
+        since: String,
+    },
+    /// Detect documentation drift and roadmap-vs-implementation drift.
+    Drift {
+        /// Project name.
+        project: String,
+    },    /// Decision-support health, pending work, and risk summary for a project.
     Status {
         /// Project name.
         project: String,
@@ -523,7 +535,65 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Status { project } => {
+        Commands::Evolution { project, since } => {
+            let since_ts = parse_since_arg(&since)?;
+            let evo = store.project_evolution(&project, since_ts, &since)?;
+            println!(
+                "Evolution: {} (since {} / {})",
+                evo.project.name,
+                evo.since_label,
+                format_day(evo.since_ts)
+            );
+            println!(
+                "\nChanges:\n  Added:    {}\n  Modified: {}\n  Deleted:  {}",
+                evo.added_count, evo.modified_count, evo.deleted_count
+            );
+
+            println!("\nActive areas since {}:", evo.since_label);
+            if evo.new_active_areas.is_empty() {
+                println!("  (none)");
+            } else {
+                for a in &evo.new_active_areas {
+                    println!("  - {a}");
+                }
+            }
+
+            println!("\nInactive areas:");
+            if evo.inactive_areas.is_empty() {
+                println!("  (none)");
+            } else {
+                for a in &evo.inactive_areas {
+                    println!("  - {a}");
+                }
+            }
+
+            println!("\nEmerging concepts:");
+            if evo.emerging_concepts.is_empty() {
+                println!("  (none)");
+            } else {
+                println!("  {}", evo.emerging_concepts.join(", "));
+            }
+
+            println!("\nDocumentation coverage:\n  {}", evo.documentation_coverage);
+            println!(
+                "\nSignals:\n  Open questions: {}\n  Pending work:   {}",
+                evo.open_questions_count, evo.pending_work_count
+            );
+        }
+        Commands::Drift { project } => {
+            let drift = store.project_drift(&project)?;
+            println!("Drift report: {}", drift.project.name);
+            if drift.findings.is_empty() {
+                println!("  No documentation or roadmap drift detected.");
+            } else {
+                for finding in &drift.findings {
+                    println!("\n[{}] {}", finding.kind, finding.summary);
+                    for ev in &finding.evidence {
+                        println!("  - {ev}");
+                    }
+                }
+            }
+        }        Commands::Status { project } => {
             let st = store.project_status(&project)?;
             let root_prefix = st.project.root_path.as_deref().unwrap_or("");
             println!("Project: {} ({} active, {} deleted)", st.project.name, st.active_objects, st.deleted_objects);
@@ -1169,3 +1239,4 @@ fn parse_since_arg(raw: &str) -> Result<i64> {
         .ok_or_else(|| anyhow::anyhow!("cannot resolve local time for {trimmed}"))?;
     Ok(local_dt.timestamp())
 }
+

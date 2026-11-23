@@ -460,3 +460,35 @@ pub struct ChangedSinceReport {
     pub added: Vec<ObjectRecord>,
     pub deleted: Vec<ObjectRecord>,
 }
+
+/// Deterministic project evolution summary returned by `vos evolution <project>`.
+#[derive(Debug, Clone)]
+pub struct ProjectEvolution {
+    pub project: Project,
+    pub since_label: String,
+    pub since_ts: i64,
+    pub added_count: usize,
+    pub modified_count: usize,
+    pub deleted_count: usize,
+    pub new_active_areas: Vec<String>,
+    pub inactive_areas: Vec<String>,
+    pub emerging_concepts: Vec<String>,
+    pub documentation_coverage: String,
+    pub open_questions_count: usize,
+    pub pending_work_count: usize,
+}
+
+/// Single deterministic drift finding returned by `vos drift <project>`.
+#[derive(Debug, Clone)]
+pub struct DriftFinding {
+    pub kind: String,
+    pub summary: String,
+    pub evidence: Vec<String>,
+}
+
+/// Project drift report comparing code activity, documentation freshness, and roadmap tasks.
+#[derive(Debug, Clone)]
+pub struct ProjectDrift {
+    pub project: Project,
+    pub findings: Vec<DriftFinding>,
+}

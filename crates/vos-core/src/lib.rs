@@ -7,9 +7,10 @@ pub mod util;
 pub use error::VosError;
 pub use models::{
     ActiveArea, BenchmarkRunRecord, CategoryBenchmarkStats, ChangedSinceReport, ConceptExplanation,
-    ContinueSuggestion, EventRecord, EventType, ObjectDetails, ObjectKind, ObjectRecord,
-    ObjectWhy, Project, ProjectActivity, ProjectContinue, ProjectContext, ProjectHealth,
+    ContinueSuggestion, DriftFinding, EventRecord, EventType, ObjectDetails, ObjectKind, ObjectRecord,
+    ObjectWhy, Project, ProjectActivity, ProjectContinue, ProjectContext, ProjectDrift, ProjectEvolution, ProjectHealth,
     ProjectResume, ProjectStart, ProjectStatus, ProjectSummary, QueryIntent, RelatedHit,
     SearchBenchmarkCase, SearchBenchmarkCaseResult, SearchBenchmarkReport, SearchHit, SearchSignal,
     SearchVisibility,
 };
+

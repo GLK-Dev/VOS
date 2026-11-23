@@ -230,7 +230,7 @@ impl Store {
         })
     }
 
-    fn scan_project_markers(
+    pub(crate) fn scan_project_markers(
         &self,
         project_id: &str,
     ) -> Result<(Vec<String>, Vec<String>), StoreError> {
@@ -494,3 +494,4 @@ mod tests {
         assert_eq!(diff.added[0].title, "context.rs");
     }
 }
+
