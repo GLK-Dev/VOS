@@ -157,6 +157,7 @@ pub struct SearchHit {
     pub title: String,
     pub path: String,
     pub kind: ObjectKind,
+    pub is_noise: bool,
     pub snippet: String,
     pub score: f64,
 }
@@ -241,10 +242,20 @@ pub struct ObjectWhy {
     pub recent_events: Vec<EventRecord>,
 }
 
-/// Single search benchmark case loaded from YAML (`tests/search_benchmark.yaml`).
+/// Combined daily-launch briefing returned by `vos start <project>`.
+#[derive(Debug, Clone)]
+pub struct ProjectStart {
+    pub resume: ProjectResume,
+    pub recent_events: Vec<EventRecord>,
+    pub open_questions: Vec<String>,
+}
+
+/// Single search benchmark case loaded from YAML.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SearchBenchmarkCase {
     pub query: String,
+    #[serde(default)]
+    pub category: Option<String>,
     #[serde(default)]
     pub project: Option<String>,
     #[serde(default)]
@@ -253,20 +264,41 @@ pub struct SearchBenchmarkCase {
     pub expected_top3: Vec<String>,
     #[serde(default)]
     pub expected_top5: Vec<String>,
+    #[serde(default)]
+    pub expected_projects: Vec<String>,
 }
 
 /// Outcome of evaluating a single benchmark query.
 #[derive(Debug, Clone)]
 pub struct SearchBenchmarkCaseResult {
     pub query: String,
+    pub category: String,
     pub project: Option<String>,
     pub top1_hit: Option<bool>,
     pub top3_hit: Option<bool>,
     pub top5_hit: Option<bool>,
+    pub reciprocal_rank: Option<f64>,
+    pub noise_hits: usize,
+    pub returned_hits: usize,
+    pub cross_project_matched: usize,
+    pub cross_project_total: usize,
     pub actual_top5: Vec<String>,
 }
 
-/// Aggregate accuracy report for a search benchmark suite.
+/// Per-category summary inside a benchmark report.
+#[derive(Debug, Clone)]
+pub struct CategoryBenchmarkStats {
+    pub category: String,
+    pub cases: usize,
+    pub top1_passed: usize,
+    pub top1_total: usize,
+    pub top3_passed: usize,
+    pub top3_total: usize,
+    pub top5_passed: usize,
+    pub top5_total: usize,
+}
+
+/// Aggregate accuracy, MRR, noise rate, and cross-project recall for a search benchmark suite.
 #[derive(Debug, Clone)]
 pub struct SearchBenchmarkReport {
     pub total_cases: usize,
@@ -276,5 +308,11 @@ pub struct SearchBenchmarkReport {
     pub top3_total: usize,
     pub top5_passed: usize,
     pub top5_total: usize,
+    pub mrr: f64,
+    pub noise_hits: usize,
+    pub total_returned_hits: usize,
+    pub cross_project_matched: usize,
+    pub cross_project_total: usize,
+    pub categories: Vec<CategoryBenchmarkStats>,
     pub cases: Vec<SearchBenchmarkCaseResult>,
 }

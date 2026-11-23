@@ -26,7 +26,6 @@ const NOISE_PENALTY: f64 = -10.0;
 
 struct SearchCandidate {
     hit: SearchHit,
-    is_noise: bool,
     chunk_hits: usize,
     matched_object_fts: bool,
     best_chunk_bm25: Option<f64>,
@@ -151,10 +150,10 @@ impl Store {
                         title,
                         path,
                         kind,
+                        is_noise,
                         snippet: snippet.clone(),
                         score: 0.0,
                     },
-                    is_noise,
                     chunk_hits: 0,
                     matched_object_fts: false,
                     best_chunk_bm25: None,
@@ -207,10 +206,10 @@ impl Store {
                         title,
                         path,
                         kind,
+                        is_noise,
                         snippet: snippet.clone(),
                         score: 0.0,
                     },
-                    is_noise,
                     chunk_hits: 0,
                     matched_object_fts: false,
                     best_chunk_bm25: None,
@@ -488,7 +487,7 @@ fn score_search_candidate(cand: &SearchCandidate, query_terms: &[String]) -> f64
         score += PATH_CONTAINS_BOOST;
     }
 
-    if cand.is_noise {
+    if cand.hit.is_noise {
         score += NOISE_PENALTY;
     }
 
@@ -716,4 +715,5 @@ mod tests {
         assert_eq!(ctx_all.recent_objects.len(), 3);
     }
 }
+
 

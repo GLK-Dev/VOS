@@ -101,7 +101,11 @@ enum Commands {
         #[arg(long)]
         include_noise: bool,
     },
-    /// Summarize where work stopped and suggest starting points to resume a project.
+    /// Unified project kickoff view (resume + recent activity + open questions).
+    Start {
+        /// Project name.
+        project: String,
+    },    /// Summarize where work stopped and suggest starting points to resume a project.
     Resume {
         /// Project name.
         project: String,
@@ -460,7 +464,64 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Resume { project } => {
+        Commands::Start { project } => {
+            let start = store.project_start(&project)?;
+            let res = &start.resume;
+            let root_prefix = res.project.root_path.as_deref().unwrap_or("");
+            println!("Project: {} ({} active objects)", res.project.name, res.active_objects);
+
+            println!("\nLast active:");
+            match res.last_activity_at {
+                Some(ts) => println!("  {} ({})", format_relative(ts), format_day(ts)),
+                None => println!("  never"),
+            }
+
+            println!("\nSuggested reading:");
+            if res.starting_points.is_empty() {
+                println!("  (none)");
+            } else {
+                for (idx, obj) in res.starting_points.iter().enumerate() {
+                    println!("  {}. {}", idx + 1, display_relative(&obj.path, root_prefix));
+                }
+            }
+
+            println!("\nRecent activity:");
+            if res.recently_modified.is_empty() {
+                println!("  (none)");
+            } else {
+                for obj in &res.recently_modified {
+                    println!(
+                        "  - [{}] {} ({})",
+                        obj.kind,
+                        display_relative(&obj.path, root_prefix),
+                        format_day(obj.modified_at)
+                    );
+                }
+            }
+
+            println!("\nMost active areas:");
+            if res.most_active_areas.is_empty() {
+                println!("  (none)");
+            } else {
+                for area in &res.most_active_areas {
+                    println!(
+                        "  - {} ({} recent files, last {})",
+                        area.area,
+                        area.object_count,
+                        format_day(area.latest_modified_at)
+                    );
+                }
+            }
+
+            println!("\nOpen questions:");
+            if start.open_questions.is_empty() {
+                println!("  (none tracked)");
+            } else {
+                for q in &start.open_questions {
+                    println!("  - {q}");
+                }
+            }
+        }        Commands::Resume { project } => {
             let res = store.project_resume(&project)?;
             let root_prefix = res.project.root_path.as_deref().unwrap_or("");
             println!("Project: {} ({} active objects)", res.project.name, res.active_objects);
@@ -607,22 +668,28 @@ fn main() -> Result<()> {
                     let t1 = case.top1_hit.map(fmt_hit).unwrap_or("-");
                     let t3 = case.top3_hit.map(fmt_hit).unwrap_or("-");
                     let t5 = case.top5_hit.map(fmt_hit).unwrap_or("-");
+                    let cp = if case.cross_project_total > 0 {
+                        format!(" | proj: {}/{}", case.cross_project_matched, case.cross_project_total)
+                    } else {
+                        String::new()
+                    };
                     println!(
-                        "query: {:16} | Top-1: {:4} | Top-3: {:4} | Top-5: {:4}",
-                        case.query, t1, t3, t5
+                        "[{:15}] {:24} | T1:{:4} T3:{:4} T5:{:4}{}",
+                        case.category, case.query, t1, t3, t5, cp
                     );
-                    if case.top1_hit == Some(false)
+                    let failed_file = case.top1_hit == Some(false)
                         || case.top3_hit == Some(false)
-                        || case.top5_hit == Some(false)
-                    {
+                        || case.top5_hit == Some(false);
+                    let failed_proj = case.cross_project_matched < case.cross_project_total;
+                    if failed_file || failed_proj {
                         println!("  actual: {}", case.actual_top5.join(", "));
                     }
                 }
 
-                println!("\nSummary ({} cases):", report.total_cases);
+                println!("\nBenchmark Results (Queries: {}):", report.total_cases);
                 if report.top1_total > 0 {
                     println!(
-                        "  Top-1: {}/{} ({:.0}%)",
+                        "  Top-1: {}/{} ({:.1}%)",
                         report.top1_passed,
                         report.top1_total,
                         pct(report.top1_passed, report.top1_total)
@@ -630,7 +697,7 @@ fn main() -> Result<()> {
                 }
                 if report.top3_total > 0 {
                     println!(
-                        "  Top-3: {}/{} ({:.0}%)",
+                        "  Top-3: {}/{} ({:.1}%)",
                         report.top3_passed,
                         report.top3_total,
                         pct(report.top3_passed, report.top3_total)
@@ -638,11 +705,46 @@ fn main() -> Result<()> {
                 }
                 if report.top5_total > 0 {
                     println!(
-                        "  Top-5: {}/{} ({:.0}%)",
+                        "  Top-5: {}/{} ({:.1}%)",
                         report.top5_passed,
                         report.top5_total,
                         pct(report.top5_passed, report.top5_total)
                     );
+                }
+                println!("  MRR:   {:.3}", report.mrr);
+                println!(
+                    "  Noise Hits: {} / {} ({:.1}%)",
+                    report.noise_hits,
+                    report.total_returned_hits,
+                    pct(report.noise_hits, report.total_returned_hits)
+                );
+                if report.cross_project_total > 0 {
+                    println!(
+                        "  Cross-Project Recall: {}/{} ({:.1}%)",
+                        report.cross_project_matched,
+                        report.cross_project_total,
+                        pct(report.cross_project_matched, report.cross_project_total)
+                    );
+                }
+
+                if report.categories.len() > 1 {
+                    println!("\nBy Category:");
+                    for cat in &report.categories {
+                        let t3_str = if cat.top3_total > 0 {
+                            format!("{}/{}", cat.top3_passed, cat.top3_total)
+                        } else {
+                            "-".to_string()
+                        };
+                        let t5_str = if cat.top5_total > 0 {
+                            format!("{}/{}", cat.top5_passed, cat.top5_total)
+                        } else {
+                            "-".to_string()
+                        };
+                        println!(
+                            "  {:18} | cases: {:2} | Top-3: {:5} | Top-5: {:5}",
+                            cat.category, cat.cases, t3_str, t5_str
+                        );
+                    }
                 }
             }
         },
@@ -706,4 +808,5 @@ fn display_relative<'a>(path: &'a str, root: &str) -> &'a str {
         .filter(|rest| !rest.is_empty())
         .unwrap_or(path)
 }
+
 

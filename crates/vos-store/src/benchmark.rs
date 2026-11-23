@@ -1,6 +1,10 @@
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
-use vos_core::{SearchBenchmarkCase, SearchBenchmarkCaseResult, SearchBenchmarkReport, SearchHit};
+use vos_core::{
+    CategoryBenchmarkStats, SearchBenchmarkCase, SearchBenchmarkCaseResult, SearchBenchmarkReport,
+    SearchHit,
+};
 
 use crate::{Store, StoreError};
 
@@ -12,7 +16,7 @@ pub fn load_benchmark_cases(path: &Path) -> Result<Vec<SearchBenchmarkCase>, Sto
 }
 
 impl Store {
-    /// Evaluates a slice of benchmark queries against this store and computes Top-1/Top-3/Top-5 hit rates.
+    /// Evaluates benchmark queries and computes Top-K accuracy, MRR, noise rate, and cross-project recall.
     pub fn run_search_benchmark(
         &self,
         cases: &[SearchBenchmarkCase],
@@ -24,9 +28,26 @@ impl Store {
         let mut top3_total = 0_usize;
         let mut top5_passed = 0_usize;
         let mut top5_total = 0_usize;
+        let mut rr_sum = 0.0_f64;
+        let mut rr_count = 0_usize;
+        let mut noise_hits = 0_usize;
+        let mut total_returned_hits = 0_usize;
+        let mut cross_matched = 0_usize;
+        let mut cross_total = 0_usize;
+
+        let mut cat_map: BTreeMap<String, CategoryBenchmarkStats> = BTreeMap::new();
 
         for case in cases {
+            let category = case
+                .category
+                .clone()
+                .unwrap_or_else(|| "Uncategorized".to_string());
             let hits = self.search(&case.query, case.project.as_deref(), 5)?;
+
+            let case_noise = hits.iter().filter(|h| h.is_noise).count();
+            noise_hits += case_noise;
+            total_returned_hits += hits.len();
+
             let actual_top5: Vec<String> = hits
                 .iter()
                 .map(|h| {
@@ -88,15 +109,92 @@ impl Store {
                 None
             };
 
+            // Compute reciprocal rank across the union of specified file expectations.
+            let mut mrr_targets: Vec<String> = Vec::new();
+            for list in [&case.expected_top1, &case.expected_top3, &case.expected_top5] {
+                for item in list {
+                    if !mrr_targets.contains(item) {
+                        mrr_targets.push(item.clone());
+                    }
+                }
+            }
+            let reciprocal_rank = if !mrr_targets.is_empty() {
+                rr_count += 1;
+                let rr = hits
+                    .iter()
+                    .position(|h| matches_expected(h, &mrr_targets))
+                    .map(|idx| 1.0 / (idx + 1) as f64)
+                    .unwrap_or(0.0);
+                rr_sum += rr;
+                Some(rr)
+            } else {
+                None
+            };
+
+            // Cross-project recall across Top-5 hits.
+            let mut case_cross_matched = 0_usize;
+            let case_cross_total = case.expected_projects.len();
+            if case_cross_total > 0 {
+                let returned_projects: HashSet<String> = hits
+                    .iter()
+                    .filter_map(|h| h.project_name.as_ref().map(|p| p.to_lowercase()))
+                    .collect();
+                for expected_proj in &case.expected_projects {
+                    if returned_projects.contains(&expected_proj.to_lowercase()) {
+                        case_cross_matched += 1;
+                    }
+                }
+                cross_matched += case_cross_matched;
+                cross_total += case_cross_total;
+            }
+
+            let cat_entry = cat_map
+                .entry(category.clone())
+                .or_insert_with(|| CategoryBenchmarkStats {
+                    category: category.clone(),
+                    cases: 0,
+                    top1_passed: 0,
+                    top1_total: 0,
+                    top3_passed: 0,
+                    top3_total: 0,
+                    top5_passed: 0,
+                    top5_total: 0,
+                });
+            cat_entry.cases += 1;
+            if let Some(ok) = top1_hit {
+                cat_entry.top1_total += 1;
+                cat_entry.top1_passed += usize::from(ok);
+            }
+            if let Some(ok) = top3_hit {
+                cat_entry.top3_total += 1;
+                cat_entry.top3_passed += usize::from(ok);
+            }
+            if let Some(ok) = top5_hit {
+                cat_entry.top5_total += 1;
+                cat_entry.top5_passed += usize::from(ok);
+            }
+
             results.push(SearchBenchmarkCaseResult {
                 query: case.query.clone(),
+                category,
                 project: case.project.clone(),
                 top1_hit,
                 top3_hit,
                 top5_hit,
+                reciprocal_rank,
+                noise_hits: case_noise,
+                returned_hits: hits.len(),
+                cross_project_matched: case_cross_matched,
+                cross_project_total: case_cross_total,
                 actual_top5,
             });
         }
+
+        let mrr = if rr_count == 0 {
+            0.0
+        } else {
+            rr_sum / rr_count as f64
+        };
 
         Ok(SearchBenchmarkReport {
             total_cases: cases.len(),
@@ -106,6 +204,12 @@ impl Store {
             top3_total,
             top5_passed,
             top5_total,
+            mrr,
+            noise_hits,
+            total_returned_hits,
+            cross_project_matched: cross_matched,
+            cross_project_total: cross_total,
+            categories: cat_map.into_values().collect(),
             cases: results,
         })
     }

@@ -5,7 +5,7 @@ use rusqlite::params;
 use vos_core::util::now_unix;
 use vos_core::{
     ActiveArea, EventRecord, EventType, ObjectKind, ObjectRecord, ObjectWhy, ProjectActivity,
-    ProjectResume, RelatedHit,
+    ProjectResume, ProjectStart, RelatedHit,
 };
 
 use crate::queries::{build_fts_or_query, map_object_row};
@@ -156,6 +156,83 @@ impl Store {
     }
 
 
+
+    /// Builds a unified project kickoff briefing combining resume, recent activity, and open markers.
+    pub fn project_start(&self, project_name: &str) -> Result<ProjectStart, StoreError> {
+        let resume = self.project_resume(project_name)?;
+        let project_id = resume.project.id.clone();
+
+        let mut ev_stmt = self.conn.prepare(
+            "SELECT e.id, e.project_id, e.object_id, e.event_type, e.path, e.detail, e.created_at
+             FROM events e
+             LEFT JOIN objects o ON o.id = e.object_id
+             WHERE e.project_id = ?1
+               AND COALESCE(o.is_noise, 0) = 0
+             ORDER BY e.created_at DESC, e.id DESC
+             LIMIT 8",
+        )?;
+        let recent_events = ev_stmt
+            .query_map(params![project_id], |row| {
+                let et: String = row.get(3)?;
+                Ok(EventRecord {
+                    id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    object_id: row.get(2)?,
+                    event_type: EventType::from_db(&et),
+                    path: row.get(4)?,
+                    detail: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Deterministically surface explicit open-question / TODO markers from project notes.
+        let mut q_stmt = self.conn.prepare(
+            "SELECT o.title, c.text
+             FROM chunks c
+             JOIN objects o ON o.id = c.object_id
+             WHERE o.project_id = ?1
+               AND o.is_deleted = 0
+               AND o.is_noise = 0
+               AND o.kind = 'note'
+             ORDER BY o.modified_at DESC, c.chunk_index ASC
+             LIMIT 80",
+        )?;
+        let note_chunks = q_stmt
+            .query_map(params![resume.project.id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut open_questions = Vec::new();
+        for (title, text) in note_chunks {
+            for line in text.lines() {
+                let trimmed = line.trim().trim_start_matches(['-', '*', '>', ' ']);
+                let lower = trimmed.to_lowercase();
+                if lower.starts_with("open question:")
+                    || lower.starts_with("todo:")
+                    || lower.starts_with("fixme:")
+                {
+                    let entry = format!("{title}: {trimmed}");
+                    if !open_questions.contains(&entry) {
+                        open_questions.push(entry);
+                    }
+                    if open_questions.len() >= 5 {
+                        break;
+                    }
+                }
+            }
+            if open_questions.len() >= 5 {
+                break;
+            }
+        }
+
+        Ok(ProjectStart {
+            resume,
+            recent_events,
+            open_questions,
+        })
+    }
     /// Explains why an object matters within its project using deterministic signals.
     pub fn why_object(
         &self,
@@ -889,5 +966,6 @@ mod tests {
         assert!(!why.recent_events.is_empty());
     }
 }
+
 
 
