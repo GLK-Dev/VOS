@@ -397,3 +397,66 @@ pub struct BenchmarkRunRecord {
 
 
 
+
+/// Deterministic project health classification for `vos status <project>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectHealth {
+    Active,
+    Warm,
+    Dormant,
+    Empty,
+}
+
+impl ProjectHealth {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "Active",
+            Self::Warm => "Warm",
+            Self::Dormant => "Dormant",
+            Self::Empty => "Empty",
+        }
+    }
+}
+
+impl fmt::Display for ProjectHealth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Decision-support health and signal summary returned by `vos status <project>`.
+#[derive(Debug, Clone)]
+pub struct ProjectStatus {
+    pub project: Project,
+    pub health: ProjectHealth,
+    pub last_change_at: Option<i64>,
+    pub active_objects: usize,
+    pub deleted_objects: usize,
+    pub key_documents: Vec<ObjectRecord>,
+    pub open_questions: Vec<String>,
+    pub pending_work: Vec<String>,
+    pub active_areas: Vec<ActiveArea>,
+    pub risk_areas: Vec<String>,
+}
+
+/// Deterministic concept explanation assembled from project docs, code, and `config/concepts.yaml`.
+#[derive(Debug, Clone)]
+pub struct ConceptExplanation {
+    pub concept: String,
+    pub files_contributing: Vec<SearchHit>,
+    pub definition: Option<String>,
+    pub related_concepts: Vec<String>,
+    pub relevant_code: Vec<SearchHit>,
+}
+
+/// Project memory diff since a date returned by `vos changed-since`.
+#[derive(Debug, Clone)]
+pub struct ChangedSinceReport {
+    pub project_name: Option<String>,
+    pub project_root: Option<String>,
+    pub since_label: String,
+    pub since_ts: i64,
+    pub modified: Vec<ObjectRecord>,
+    pub added: Vec<ObjectRecord>,
+    pub deleted: Vec<ObjectRecord>,
+}

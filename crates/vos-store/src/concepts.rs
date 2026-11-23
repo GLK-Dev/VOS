@@ -43,6 +43,11 @@ impl ConceptDictionary {
         Self { entries }
     }
 
+    /// Exposes the underlying concept entries for reverse/related lookup.
+    pub(crate) fn entries(&self) -> &HashMap<String, Vec<String>> {
+        &self.entries
+    }
+
     /// Returns synonym phrases for a normalized query if present in the dictionary.
     pub fn lookup(&self, query: &str) -> Option<&[String]> {
         let norm = normalize_phrase(query);
@@ -129,3 +134,4 @@ fn normalize_phrase(raw: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
+

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, NaiveDate, TimeZone};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 use vos_core::util::now_unix;
@@ -107,7 +107,26 @@ enum Commands {
         #[arg(long)]
         include_noise: bool,
     },
-    /// Unified project kickoff view (resume + recent activity + open questions).
+    /// Decision-support health, pending work, and risk summary for a project.
+    Status {
+        /// Project name.
+        project: String,
+    },
+    /// Explain a concept deterministically using project docs, code, and `config/concepts.yaml`.
+    Explain {
+        /// Concept or topic to explain.
+        concept: String,
+        /// Optional project scope.
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Show objects modified, added, or deleted since YYYY-MM-DD (or Nd, e.g. 7d).
+    ChangedSince {
+        /// Cutoff date (`YYYY-MM-DD`) or relative days (`7d`).
+        since: String,
+        /// Optional project name (positional).
+        project: Option<String>,
+    },    /// Unified project kickoff view (resume + recent activity + open questions).
     Start {
         /// Project name.
         project: String,
@@ -504,7 +523,155 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Continue { project } => {
+        Commands::Status { project } => {
+            let st = store.project_status(&project)?;
+            let root_prefix = st.project.root_path.as_deref().unwrap_or("");
+            println!("Project: {} ({} active, {} deleted)", st.project.name, st.active_objects, st.deleted_objects);
+            println!("\nHealth: {}", st.health);
+
+            println!("\nLast change:");
+            match st.last_change_at {
+                Some(ts) => println!("  {} ({})", format_relative(ts), format_day(ts)),
+                None => println!("  never"),
+            }
+
+            println!("\nKey documents:");
+            if st.key_documents.is_empty() {
+                println!("  (none)");
+            } else {
+                for doc in &st.key_documents {
+                    println!("  - {}", display_relative(&doc.path, root_prefix));
+                }
+            }
+
+            println!("\nOpen questions:");
+            if st.open_questions.is_empty() {
+                println!("  (none tracked)");
+            } else {
+                for q in &st.open_questions {
+                    println!("  - {q}");
+                }
+            }
+
+            println!("\nPending work:");
+            if st.pending_work.is_empty() {
+                println!("  (none tracked)");
+            } else {
+                for item in &st.pending_work {
+                    println!("  - {item}");
+                }
+            }
+
+            println!("\nActive areas:");
+            if st.active_areas.is_empty() {
+                println!("  (none)");
+            } else {
+                for area in &st.active_areas {
+                    println!("  - {} ({} recent files)", area.area, area.object_count);
+                }
+            }
+
+            println!("\nRisk areas:");
+            if st.risk_areas.is_empty() {
+                println!("  (none detected)");
+            } else {
+                for risk in &st.risk_areas {
+                    println!("  - {risk}");
+                }
+            }
+        }
+        Commands::Explain { concept, project } => {
+            let exp = store.explain_concept(&concept, project.as_deref())?;
+            println!("Concept: {}", exp.concept);
+
+            println!("\nFiles contributing:");
+            if exp.files_contributing.is_empty() {
+                println!("  (none)");
+            } else {
+                for hit in &exp.files_contributing {
+                    let proj = hit.project_name.as_deref().unwrap_or("-");
+                    println!("  - {} [{}] ({})", hit.title, proj, hit.path);
+                }
+            }
+
+            println!("\nDefinition (extracted):");
+            match exp.definition {
+                Some(ref def) => println!("  {def}"),
+                None => println!("  (no documentation excerpt found)"),
+            }
+
+            println!("\nRelated concepts:");
+            if exp.related_concepts.is_empty() {
+                println!("  (none)");
+            } else {
+                for rel in &exp.related_concepts {
+                    println!("  - {rel}");
+                }
+            }
+
+            println!("\nRelevant code:");
+            if exp.relevant_code.is_empty() {
+                println!("  (none)");
+            } else {
+                for hit in &exp.relevant_code {
+                    let proj = hit.project_name.as_deref().unwrap_or("-");
+                    println!("  - {} [{}] ({})", hit.title, proj, hit.path);
+                }
+            }
+        }
+        Commands::ChangedSince { since, project } => {
+            let since_ts = parse_since_arg(&since)?;
+            let report = store.changed_since(since_ts, &since, project.as_deref())?;
+            let root_prefix = report.project_root.as_deref().unwrap_or("");
+            let scope = report.project_name.as_deref().unwrap_or("all projects");
+
+            println!(
+                "Changes in {} since {} ({}):",
+                scope,
+                report.since_label,
+                format_day(report.since_ts)
+            );
+
+            println!("\nModified ({}):", report.modified.len());
+            if report.modified.is_empty() {
+                println!("  (none)");
+            } else {
+                for obj in report.modified.iter().take(25) {
+                    println!(
+                        "  - {} ({})",
+                        display_relative(&obj.path, root_prefix),
+                        format_day(obj.modified_at)
+                    );
+                }
+                if report.modified.len() > 25 {
+                    println!("  ... and {} more", report.modified.len() - 25);
+                }
+            }
+
+            println!("\nAdded ({}):", report.added.len());
+            if report.added.is_empty() {
+                println!("  (none)");
+            } else {
+                for obj in report.added.iter().take(25) {
+                    println!("  - {}", display_relative(&obj.path, root_prefix));
+                }
+                if report.added.len() > 25 {
+                    println!("  ... and {} more", report.added.len() - 25);
+                }
+            }
+
+            println!("\nDeleted ({}):", report.deleted.len());
+            if report.deleted.is_empty() {
+                println!("  (none)");
+            } else {
+                for obj in report.deleted.iter().take(25) {
+                    println!("  - {}", display_relative(&obj.path, root_prefix));
+                }
+                if report.deleted.len() > 25 {
+                    println!("  ... and {} more", report.deleted.len() - 25);
+                }
+            }
+        }        Commands::Continue { project } => {
             let cont = store.project_continue(&project)?;
             let res = &cont.resume;
             let root_prefix = res.project.root_path.as_deref().unwrap_or("");
@@ -983,3 +1150,22 @@ fn display_relative<'a>(path: &'a str, root: &str) -> &'a str {
 
 
 
+
+fn parse_since_arg(raw: &str) -> Result<i64> {
+    let trimmed = raw.trim();
+    if let Some(days_str) = trimmed.strip_suffix('d')
+        && let Ok(days) = days_str.parse::<i64>()
+    {
+        return Ok(now_unix().saturating_sub(days.max(0) * 86_400));
+    }
+    let date = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
+        .map_err(|e| anyhow::anyhow!("invalid date '{trimmed}' (expected YYYY-MM-DD or Nd): {e}"))?;
+    let naive_dt = date
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| anyhow::anyhow!("invalid midnight for {trimmed}"))?;
+    let local_dt = Local
+        .from_local_datetime(&naive_dt)
+        .earliest()
+        .ok_or_else(|| anyhow::anyhow!("cannot resolve local time for {trimmed}"))?;
+    Ok(local_dt.timestamp())
+}
