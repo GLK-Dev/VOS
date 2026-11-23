@@ -7,6 +7,7 @@ use anyhow::Result;
 use chrono::{DateTime, Local};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
+use vos_core::util::now_unix;
 use vos_indexer::{IndexOptions, index_path_with_options};
 use vos_store::Store;
 
@@ -88,6 +89,33 @@ enum Commands {
         /// Show flat timestamped lines instead of grouping by day.
         #[arg(long)]
         flat: bool,
+    },
+    /// Show project activity over the last N days grouped by event type.
+    Activity {
+        /// Project name.
+        project: String,
+        /// Trailing window in days.
+        #[arg(long, default_value_t = 7)]
+        days: u32,
+        /// Include lockfiles and VCS/editor housekeeping files.
+        #[arg(long)]
+        include_noise: bool,
+    },
+    /// Summarize where work stopped and suggest starting points to resume a project.
+    Resume {
+        /// Project name.
+        project: String,
+    },
+    /// Find related files using FTS5 overlap, shared tags, directory proximity, and session timing.
+    Related {
+        /// Object ID, path, unique title, or topic keyword.
+        target: String,
+        /// Restrict related results to a specific project.
+        #[arg(long)]
+        project: Option<String>,
+        /// Maximum number of related objects to display.
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
     },
 }
 
@@ -350,11 +378,7 @@ fn main() -> Result<()> {
                         Some(ref d) => format!("{rel} [{d}]"),
                         None => rel.to_string(),
                     };
-                    let list = grouped
-                        .entry(day)
-                        .or_default()
-                        .entry(kind)
-                        .or_default();
+                    let list = grouped.entry(day).or_default().entry(kind).or_default();
                     if !list.contains(&entry) {
                         list.push(entry);
                     }
@@ -369,6 +393,128 @@ fn main() -> Result<()> {
                         }
                     }
                     println!();
+                }
+            }
+        }
+        Commands::Activity {
+            project,
+            days,
+            include_noise,
+        } => {
+            let activity = store.project_activity(&project, days, include_noise)?;
+            let root_prefix = activity.project.root_path.as_deref().unwrap_or("");
+            println!(
+                "Project: {} | Last {} day(s) (since {})",
+                activity.project.name,
+                activity.days,
+                format_day(activity.since_ts)
+            );
+            if activity.events.is_empty() {
+                println!("No events in the last {} day(s).", activity.days);
+            } else {
+                let mut by_type: BTreeMap<String, Vec<String>> = BTreeMap::new();
+                for ev in &activity.events {
+                    let rel = display_relative(&ev.path, root_prefix);
+                    let entry = match ev.detail {
+                        Some(ref d) => format!("{rel} [{d}]"),
+                        None => rel.to_string(),
+                    };
+                    let list = by_type
+                        .entry(ev.event_type.as_str().to_string())
+                        .or_default();
+                    if !list.contains(&entry) {
+                        list.push(entry);
+                    }
+                }
+                for (kind, items) in by_type {
+                    println!("\n{kind} ({}):", items.len());
+                    for item in items.iter().take(15) {
+                        println!("  - {item}");
+                    }
+                    if items.len() > 15 {
+                        println!("  ... and {} more", items.len() - 15);
+                    }
+                }
+            }
+        }
+        Commands::Resume { project } => {
+            let res = store.project_resume(&project)?;
+            let root_prefix = res.project.root_path.as_deref().unwrap_or("");
+            println!("Project: {} ({} active objects)", res.project.name, res.active_objects);
+
+            println!("\nLast activity:");
+            match res.last_activity_at {
+                Some(ts) => println!("  {} ({})", format_relative(ts), format_day(ts)),
+                None => println!("  never"),
+            }
+
+            println!("\nRecently modified:");
+            if res.recently_modified.is_empty() {
+                println!("  (none)");
+            } else {
+                for obj in &res.recently_modified {
+                    println!(
+                        "  - [{}] {} ({})",
+                        obj.kind,
+                        display_relative(&obj.path, root_prefix),
+                        format_day(obj.modified_at)
+                    );
+                }
+            }
+
+            println!("\nRecent additions:");
+            if res.recent_additions.is_empty() {
+                println!("  (none)");
+            } else {
+                for obj in &res.recent_additions {
+                    println!("  - {}", display_relative(&obj.path, root_prefix));
+                }
+            }
+
+            println!("\nMost active areas:");
+            if res.most_active_areas.is_empty() {
+                println!("  (none)");
+            } else {
+                for area in &res.most_active_areas {
+                    println!(
+                        "  - {} ({} recent files, last {})",
+                        area.area,
+                        area.object_count,
+                        format_day(area.latest_modified_at)
+                    );
+                }
+            }
+
+            println!("\nSuggested starting points:");
+            if res.starting_points.is_empty() {
+                println!("  (none)");
+            } else {
+                for obj in &res.starting_points {
+                    println!("  - {}", display_relative(&obj.path, root_prefix));
+                }
+            }
+        }
+        Commands::Related {
+            target,
+            project,
+            limit,
+        } => {
+            let hits = store.find_related(&target, project.as_deref(), limit)?;
+            if hits.is_empty() {
+                println!("No related objects found for \"{target}\".");
+            } else {
+                for (idx, hit) in hits.iter().enumerate() {
+                    let proj = hit.project_name.as_deref().unwrap_or("-");
+                    println!(
+                        "{}. {} [{} | {}] (score: {})",
+                        idx + 1,
+                        hit.title,
+                        hit.kind,
+                        proj,
+                        hit.score
+                    );
+                    println!("   {}", hit.path);
+                    println!("   signals: {}", hit.reasons.join(", "));
                 }
             }
         }
@@ -395,6 +541,19 @@ fn format_day(ts: i64) -> String {
     DateTime::from_timestamp(ts, 0)
         .map(|dt| dt.with_timezone(&Local).format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| ts.to_string())
+}
+
+fn format_relative(ts: i64) -> String {
+    let diff = now_unix().saturating_sub(ts);
+    if diff < 60 {
+        "just now".to_string()
+    } else if diff < 3600 {
+        format!("{} minute(s) ago", diff / 60)
+    } else if diff < 86_400 {
+        format!("{} hour(s) ago", diff / 3600)
+    } else {
+        format!("{} day(s) ago", diff / 86_400)
+    }
 }
 
 fn display_relative<'a>(path: &'a str, root: &str) -> &'a str {

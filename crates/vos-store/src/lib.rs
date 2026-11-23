@@ -2,6 +2,7 @@
 
 mod batch;
 mod queries;
+mod recovery;
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -296,3 +297,4 @@ impl Store {
         Ok(details.object)
     }
 }
+

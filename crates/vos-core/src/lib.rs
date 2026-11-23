@@ -6,6 +6,6 @@ pub mod util;
 
 pub use error::VosError;
 pub use models::{
-    EventRecord, EventType, ObjectDetails, ObjectKind, ObjectRecord, Project, ProjectContext,
-    ProjectSummary, SearchHit,
+    ActiveArea, EventRecord, EventType, ObjectDetails, ObjectKind, ObjectRecord, Project,
+    ProjectActivity, ProjectContext, ProjectResume, ProjectSummary, RelatedHit, SearchHit,
 };

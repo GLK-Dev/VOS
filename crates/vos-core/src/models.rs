@@ -184,3 +184,44 @@ pub struct ProjectContext {
     pub noise_sample: Vec<ObjectRecord>,
     pub recent_events: Vec<EventRecord>,
 }
+
+/// Time-windowed project activity report for `vos activity <project>`.
+#[derive(Debug, Clone)]
+pub struct ProjectActivity {
+    pub project: Project,
+    pub days: u32,
+    pub since_ts: i64,
+    pub events: Vec<EventRecord>,
+}
+
+/// Aggregated subdirectory activity summary for `vos resume`.
+#[derive(Debug, Clone)]
+pub struct ActiveArea {
+    pub area: String,
+    pub object_count: usize,
+    pub latest_modified_at: i64,
+}
+
+/// Structured context-recovery briefing for `vos resume <project>`.
+#[derive(Debug, Clone)]
+pub struct ProjectResume {
+    pub project: Project,
+    pub last_activity_at: Option<i64>,
+    pub active_objects: usize,
+    pub recently_modified: Vec<ObjectRecord>,
+    pub recent_additions: Vec<ObjectRecord>,
+    pub most_active_areas: Vec<ActiveArea>,
+    pub starting_points: Vec<ObjectRecord>,
+}
+
+/// Deterministic relatedness hit returned by `vos related`.
+#[derive(Debug, Clone)]
+pub struct RelatedHit {
+    pub object_id: String,
+    pub project_name: Option<String>,
+    pub title: String,
+    pub path: String,
+    pub kind: ObjectKind,
+    pub score: i64,
+    pub reasons: Vec<String>,
+}

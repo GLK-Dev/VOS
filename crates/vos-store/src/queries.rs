@@ -323,7 +323,7 @@ pub(crate) fn map_project_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Proje
     })
 }
 
-fn map_object_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ObjectRecord> {
+pub(crate) fn map_object_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ObjectRecord> {
     let kind_str: String = row.get(3)?;
     let is_deleted: i64 = row.get(10)?;
     let is_noise: i64 = row.get(12)?;
@@ -369,6 +369,20 @@ fn build_fts_query(raw: &str) -> Result<String, StoreError> {
     Ok(tokens.join(" AND "))
 }
 
+
+pub(crate) fn build_fts_or_query(terms: &[String]) -> Option<String> {
+    let tokens: Vec<String> = terms
+        .iter()
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+        .collect();
+    if tokens.is_empty() {
+        None
+    } else {
+        Some(tokens.join(" OR "))
+    }
+}
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -488,3 +502,4 @@ mod tests {
         assert_eq!(ctx_all.recent_objects.len(), 3);
     }
 }
+
