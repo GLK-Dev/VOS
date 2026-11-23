@@ -617,3 +617,73 @@ pub struct ProjectGraph {
     pub depth: usize,
     pub hubs: Vec<GraphHub>,
 }
+/// Activity ownership metrics for a single project directory/area (`vos ownership`).
+#[derive(Debug, Clone)]
+pub struct AreaOwnership {
+    pub area: String,
+    pub file_count: usize,
+    pub event_count: usize,
+    pub recent_modified_count: usize,
+    pub activity_score: usize,
+    pub latest_modified_at: i64,
+}
+
+/// Aggregated activity ownership summary returned by `vos ownership <project>`.
+#[derive(Debug, Clone)]
+pub struct ProjectOwnership {
+    pub project: Project,
+    pub days: u32,
+    pub since_ts: i64,
+    pub total_areas: usize,
+    pub most_active_areas: Vec<AreaOwnership>,
+    pub recently_active_areas: Vec<AreaOwnership>,
+    pub most_stable_areas: Vec<AreaOwnership>,
+}
+
+/// Documentation coverage tier assigned to a project area (`vos coverage`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoverageTier {
+    WellCovered,
+    PartiallyCovered,
+    Underdocumented,
+}
+
+impl CoverageTier {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::WellCovered => "well_covered",
+            Self::PartiallyCovered => "partially_covered",
+            Self::Underdocumented => "underdocumented",
+        }
+    }
+}
+
+impl fmt::Display for CoverageTier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Documentation coverage metrics for a single project area (`vos coverage`).
+#[derive(Debug, Clone)]
+pub struct AreaCoverage {
+    pub area: String,
+    pub code_files: usize,
+    pub local_docs: usize,
+    pub md_link_refs: usize,
+    pub path_ref_refs: usize,
+    pub weighted_score: f64,
+    pub tier: CoverageTier,
+}
+
+/// Relation-aware documentation coverage summary returned by `vos coverage <project>`.
+#[derive(Debug, Clone)]
+pub struct ProjectCoverage {
+    pub project: Project,
+    pub code_files: usize,
+    pub doc_files: usize,
+    pub coverage_ratio: f64,
+    pub well_covered: Vec<AreaCoverage>,
+    pub partially_covered: Vec<AreaCoverage>,
+    pub underdocumented: Vec<AreaCoverage>,
+}

@@ -267,3 +267,39 @@ fn cli_builds_and_queries_dependency_graph() {
     assert!(why_out.contains("Dependencies:"));
     assert!(why_out.contains("Referenced by:"));
 }
+
+#[test]
+fn cli_reports_activity_ownership_and_relation_weighted_coverage() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("insight");
+    fs::create_dir_all(proj.join("docs")).unwrap();
+    fs::create_dir_all(proj.join("src/core")).unwrap();
+    fs::create_dir_all(proj.join("src/net")).unwrap();
+
+    fs::write(
+        proj.join("docs/GUIDE.md"),
+        "# Guide\nCore entrypoint: [engine.rs](../src/core/engine.rs).\n",
+    )
+    .unwrap();
+    fs::write(proj.join("src/core/engine.rs"), "pub fn run() {}\n").unwrap();
+    fs::write(proj.join("src/net/socket.rs"), "pub fn listen() {}\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "insight", proj.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "insight"]);
+
+    let own_out = assert_vos_ok(&db, &["ownership", "insight", "--days", "14"]);
+    assert!(own_out.contains("Ownership: insight"));
+    assert!(own_out.contains("Most Active Areas"));
+    assert!(own_out.contains("Recently Active (14d)"));
+    assert!(own_out.contains("Most Stable Areas"));
+
+    let cov_out = assert_vos_ok(&db, &["coverage", "insight"]);
+    assert!(cov_out.contains("Code Files: 2"));
+    assert!(cov_out.contains("Docs Files: 1"));
+    assert!(cov_out.contains("Coverage:   50.0%"));
+    assert!(cov_out.contains("Well Covered"));
+    assert!(cov_out.contains("src/core"));
+    assert!(cov_out.contains("Underdocumented"));
+    assert!(cov_out.contains("src/net"));
+}

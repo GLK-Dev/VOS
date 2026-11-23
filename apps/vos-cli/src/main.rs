@@ -172,6 +172,22 @@ enum Commands {
         #[arg(long)]
         project: Option<String>,
     },
+    /// Show non-git activity ownership hotspots and stable areas for a project.
+    Ownership {
+        /// Project name.
+        project: String,
+        /// Recency window in days for `Recently Active`.
+        #[arg(long, default_value_t = 14)]
+        days: u32,
+        /// Maximum number of areas to show per section.
+        #[arg(long, default_value_t = 8)]
+        limit: usize,
+    },
+    /// Analyze documentation coverage ratio and per-area coverage using relations.
+    Coverage {
+        /// Project name.
+        project: String,
+    },
     /// Display deterministic file dependency graph for a project or file.
     Graph {
         /// Project name.
@@ -1115,6 +1131,110 @@ fn main() -> Result<()> {
                     if hub.outgoing.is_empty() && hub.incoming.is_empty() {
                         println!("  (no edges in selected direction)");
                     }
+                }
+            }
+        }
+        Commands::Ownership {
+            project,
+            days,
+            limit,
+        } => {
+            let own = store.project_ownership(&project, days, limit)?;
+            println!(
+                "Ownership: {} (areas: {}, window: {}d)",
+                own.project.name, own.total_areas, own.days
+            );
+
+            println!("\nMost Active Areas");
+            if own.most_active_areas.is_empty() {
+                println!("  (none)");
+            } else {
+                for (idx, area) in own.most_active_areas.iter().enumerate() {
+                    println!(
+                        "  {:>2}. {:<24} {:>3} files (events: {}, recent: {}, last: {})",
+                        idx + 1,
+                        area.area,
+                        area.file_count,
+                        area.event_count,
+                        area.recent_modified_count,
+                        format_day(area.latest_modified_at)
+                    );
+                }
+            }
+
+            println!("\nRecently Active ({}d)", own.days);
+            if own.recently_active_areas.is_empty() {
+                println!("  (none in window)");
+            } else {
+                for area in &own.recently_active_areas {
+                    println!(
+                        "  - {:<24} {} recently modified ({})",
+                        area.area,
+                        area.recent_modified_count,
+                        format_day(area.latest_modified_at)
+                    );
+                }
+            }
+
+            println!("\nMost Stable Areas");
+            if own.most_stable_areas.is_empty() {
+                println!("  (none)");
+            } else {
+                for area in &own.most_stable_areas {
+                    println!(
+                        "  - {:<24} {} files (last modified: {})",
+                        area.area,
+                        area.file_count,
+                        format_day(area.latest_modified_at)
+                    );
+                }
+            }
+        }
+        Commands::Coverage { project } => {
+            let cov = store.project_coverage(&project)?;
+            println!("Coverage: {}", cov.project.name);
+            println!("\nCode Files: {}", cov.code_files);
+            println!("Docs Files: {}", cov.doc_files);
+            println!("Coverage:   {:.1}%", cov.coverage_ratio);
+
+            println!("\nWell Covered");
+            if cov.well_covered.is_empty() {
+                println!("  (none)");
+            } else {
+                for area in &cov.well_covered {
+                    let refs = area.md_link_refs + area.path_ref_refs;
+                    println!(
+                        "  - {:<24} code: {}, docs: {}, doc-refs: {}, score: {:.1}",
+                        area.area, area.code_files, area.local_docs, refs, area.weighted_score
+                    );
+                }
+            }
+
+            println!("\nPartially Covered");
+            if cov.partially_covered.is_empty() {
+                println!("  (none)");
+            } else {
+                for area in &cov.partially_covered {
+                    let refs = area.md_link_refs + area.path_ref_refs;
+                    println!(
+                        "  - {:<24} code: {}, docs: {}, doc-refs: {}, score: {:.1}",
+                        area.area, area.code_files, area.local_docs, refs, area.weighted_score
+                    );
+                }
+            }
+
+            println!("\nUnderdocumented");
+            if cov.underdocumented.is_empty() {
+                println!("  (none)");
+            } else {
+                for area in cov.underdocumented.iter().take(15) {
+                    println!(
+                        "  - {:<24} code: {}, docs: 0, doc-refs: 0",
+                        area.area, area.code_files
+                    );
+                }
+                if cov.underdocumented.len() > 15 {
+                    println!("  ... and {} more", cov.underdocumented.len() - 15);
                 }
             }
         }

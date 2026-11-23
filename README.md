@@ -6,16 +6,16 @@ See [SPEC.md](SPEC.md) for the canonical specification and [AGENTS.md](AGENTS.md
 
 ## Project Status
 
-**Version:** VOS v1.1.0 (Insight Layer — Priority 1)
+**Version:** VOS v1.1.0 (Insight Layer)
 
-**Status:** Active Development (`Project Dependency Graph` shipped; Priorities 2-5 planned)
+**Status:** Insight Layer (`graph`, `ownership`, `coverage` shipped; `snapshot` and `session` deferred pending Recovery Benchmark data)
 
 ### Validation Summary
 
 - 10 real projects indexed
 - 778 active files
 - 20/20 recovery scenarios passed
-- 28/28 tests passing
+- 30/30 tests passing
 - 0 clippy warnings
 
 ### Search Benchmark
@@ -64,6 +64,8 @@ vos why scheduler_fairness.rs
 vos related scheduler
 vos graph my-app
 vos graph my-app --target src/lib.rs --direction both
+vos ownership my-app --days 14
+vos coverage my-app
 vos explain "project context"
 vos benchmark search --config tests/search_live.yaml --save
 vos benchmark history

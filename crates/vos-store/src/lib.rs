@@ -6,6 +6,7 @@ mod concepts;
 mod decision;
 mod evolution;
 mod graph;
+mod insight;
 mod queries;
 mod recovery;
 mod search;
