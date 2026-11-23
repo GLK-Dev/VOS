@@ -7,6 +7,7 @@ pub enum ObjectKind {
     Code,
     Note,
     Doc,
+    Config,
     Model,
     Media,
     Other,
@@ -19,6 +20,7 @@ impl ObjectKind {
             Self::Code => "code",
             Self::Note => "note",
             Self::Doc => "doc",
+            Self::Config => "config",
             Self::Model => "model",
             Self::Media => "media",
             Self::Other => "other",
@@ -31,6 +33,7 @@ impl ObjectKind {
             "code" => Self::Code,
             "note" => Self::Note,
             "doc" => Self::Doc,
+            "config" => Self::Config,
             "model" => Self::Model,
             "media" => Self::Media,
             _ => Self::Other,
@@ -39,7 +42,7 @@ impl ObjectKind {
 
     /// Returns true if text content should be chunked for full-text search.
     pub fn is_text_indexable(&self) -> bool {
-        matches!(self, Self::Code | Self::Note)
+        matches!(self, Self::Code | Self::Note | Self::Config)
     }
 
     /// Relative priority used to surface human-meaningful files in `vos context`.
@@ -49,6 +52,7 @@ impl ObjectKind {
             Self::Doc => 90,
             Self::Code => 80,
             Self::Model => 70,
+            Self::Config => 50,
             Self::Media => 20,
             Self::Other => 10,
         }
@@ -492,3 +496,4 @@ pub struct ProjectDrift {
     pub project: Project,
     pub findings: Vec<DriftFinding>,
 }
+

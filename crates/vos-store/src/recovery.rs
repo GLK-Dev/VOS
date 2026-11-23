@@ -437,8 +437,8 @@ impl Store {
             );
         }
 
-        // 2. Rank-aware FTS5 overlap from title stem + tags
-        let mut terms = extract_title_terms(&src.title);
+        // 2. Rank-aware FTS5 overlap from object path/module stem + tags
+        let mut terms = extract_object_related_terms(&src.path);
         for (tag, _) in src_tags {
             if !terms.contains(tag) {
                 terms.push(tag.clone());
@@ -813,22 +813,59 @@ fn finalize_related(map: HashMap<String, CandidateAccum>, limit: usize) -> Vec<R
     items.into_iter().map(|c| c.hit).collect()
 }
 
+const GENERIC_MODULE_STEMS: &[&str] = &["mod", "lib", "main", "index"];
+const GENERIC_PARENT_DIRS: &[&str] = &["src", "lib", "app", "crates", "apps", "tests"];
+
+fn extract_object_related_terms(raw_path: &str) -> Vec<String> {
+    let path = Path::new(raw_path);
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(raw_path);
+    let stem_lower = stem.to_lowercase();
+
+    if GENERIC_MODULE_STEMS.contains(&stem_lower.as_str()) {
+        let mut cursor = path.parent();
+        while let Some(dir) = cursor {
+            if let Some(dir_name) = dir.file_name().and_then(|s| s.to_str()) {
+                let lower_dir = dir_name.to_lowercase();
+                if !GENERIC_PARENT_DIRS.contains(&lower_dir.as_str()) {
+                    let terms = split_non_generic_terms(dir_name);
+                    if !terms.is_empty() {
+                        return terms;
+                    }
+                }
+            }
+            cursor = dir.parent();
+        }
+    }
+
+    extract_title_terms(stem)
+}
+
+fn split_non_generic_terms(raw: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for part in raw.split(|c: char| !c.is_alphanumeric()) {
+        let lower = part.to_lowercase();
+        if lower.len() >= 2
+            && !GENERIC_MODULE_STEMS.contains(&lower.as_str())
+            && !GENERIC_PARENT_DIRS.contains(&lower.as_str())
+            && !matches!(lower.as_str(), "test")
+            && !out.contains(&lower)
+        {
+            out.push(lower);
+        }
+    }
+    out
+}
+
 fn extract_title_terms(raw: &str) -> Vec<String> {
     let stem = Path::new(raw)
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or(raw);
 
-    let mut out = Vec::new();
-    for part in stem.split(|c: char| !c.is_alphanumeric()) {
-        let lower = part.to_lowercase();
-        if lower.len() >= 2
-            && !matches!(lower.as_str(), "mod" | "lib" | "main" | "index" | "src" | "test" | "tests")
-            && !out.contains(&lower)
-        {
-            out.push(lower);
-        }
-    }
+    let mut out = split_non_generic_terms(stem);
     if out.is_empty() && !stem.is_empty() {
         out.push(stem.to_lowercase());
     }
@@ -1032,7 +1069,65 @@ mod tests {
         assert!(!why.related.is_empty());
         assert!(!why.recent_events.is_empty());
     }
+
+    #[test]
+    fn related_resolves_parent_module_for_generic_mod_rs_files() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("rustallm", None, None).unwrap();
+        let now = now_unix();
+
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/src/transformer/mod.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "mod.rs".to_string(),
+                summary: Some("pub mod kv_cache;".to_string()),
+                content_hash: "h_t_mod".to_string(),
+                size_bytes: 50,
+                modified_at: now - 100,
+                is_noise: false,
+                chunks: vec!["pub mod kv_cache; pub mod layer;".to_string()],
+            })
+            .unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/src/transformer/kv_cache.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "kv_cache.rs".to_string(),
+                summary: Some("Transformer KV cache".to_string()),
+                content_hash: "h_kv".to_string(),
+                size_bytes: 80,
+                modified_at: now - 110,
+                is_noise: false,
+                chunks: vec!["// transformer kv cache paging".to_string()],
+            })
+            .unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/src/engine/mod.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "mod.rs".to_string(),
+                summary: Some("pub mod runner;".to_string()),
+                content_hash: "h_e_mod".to_string(),
+                size_bytes: 50,
+                modified_at: now - 5000,
+                is_noise: false,
+                chunks: vec!["pub mod runner;".to_string()],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        let related = store
+            .find_related("transformer/mod.rs", Some("rustallm"), 5)
+            .unwrap();
+        assert_eq!(related[0].title, "kv_cache.rs");
+    }
 }
+
 
 
 

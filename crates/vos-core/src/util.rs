@@ -66,6 +66,14 @@ fn normalize_for_prefix(path: &str) -> String {
 
 /// Classifies a file by extension into a VOS `ObjectKind`.
 pub fn classify_path(path: &Path) -> ObjectKind {
+    if path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n == ".env" || n.starts_with(".env."))
+    {
+        return ObjectKind::Config;
+    }
+
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -74,9 +82,12 @@ pub fn classify_path(path: &Path) -> ObjectKind {
     match ext.as_deref() {
         Some(
             "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "c" | "h" | "cpp" | "hpp" | "cc" | "go"
-            | "java" | "kt" | "swift" | "sh" | "bash" | "zsh" | "ps1" | "sql" | "toml" | "yaml"
-            | "yml" | "json" | "html" | "css" | "scss" | "nix" | "lua" | "zig",
+            | "java" | "kt" | "swift" | "sh" | "bash" | "zsh" | "ps1" | "bat" | "cmd" | "sql"
+            | "html" | "css" | "scss" | "nix" | "lua" | "zig",
         ) => ObjectKind::Code,
+        Some("json" | "yaml" | "yml" | "toml" | "ini" | "env" | "conf" | "properties") => {
+            ObjectKind::Config
+        }
         Some("md" | "markdown" | "txt" | "rst" | "org" | "adoc" | "log") => ObjectKind::Note,
         Some("pdf" | "docx" | "doc" | "odt" | "epub" | "pptx" | "xlsx" | "csv") => ObjectKind::Doc,
         Some("gguf" | "safetensors" | "onnx" | "ggml" | "pt" | "pth") => ObjectKind::Model,
@@ -196,6 +207,11 @@ mod tests {
     #[test]
     fn classify_recognizes_core_extensions() {
         assert_eq!(classify_path(Path::new("src/main.rs")), ObjectKind::Code);
+        assert_eq!(classify_path(Path::new("init.bat")), ObjectKind::Code);
+        assert_eq!(classify_path(Path::new("run.cmd")), ObjectKind::Code);
+        assert_eq!(classify_path(Path::new("Cargo.toml")), ObjectKind::Config);
+        assert_eq!(classify_path(Path::new("locales/en.json")), ObjectKind::Config);
+        assert_eq!(classify_path(Path::new(".github/workflows/ci.yml")), ObjectKind::Config);
         assert_eq!(classify_path(Path::new("SPEC.MD")), ObjectKind::Note);
         assert_eq!(classify_path(Path::new("paper.pdf")), ObjectKind::Doc);
         assert_eq!(classify_path(Path::new("qwen3.gguf")), ObjectKind::Model);
@@ -234,6 +250,7 @@ mod tests {
         );
     }
 }
+
 
 
 

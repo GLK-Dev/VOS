@@ -40,9 +40,9 @@ pub struct IndexBatch<'conn> {
 impl<'conn> IndexBatch<'conn> {
     /// Idempotently inserts or updates an object and its chunks within the active transaction.
     pub fn upsert_object(&mut self, input: UpsertObjectInput) -> Result<UpsertOutcome, StoreError> {
-        let existing: Option<(String, Option<String>, String, i64, i64)> = {
+        let existing: Option<(String, Option<String>, String, i64, i64, String)> = {
             let mut stmt = self.tx.prepare_cached(
-                "SELECT id, project_id, content_hash, is_deleted, is_noise
+                "SELECT id, project_id, content_hash, is_deleted, is_noise, kind
                  FROM objects WHERE path = ?1",
             )?;
             stmt.query_row(params![input.path], |row| {
@@ -52,6 +52,7 @@ impl<'conn> IndexBatch<'conn> {
                     row.get(2)?,
                     row.get(3)?,
                     row.get(4)?,
+                    row.get(5)?,
                 ))
             })
             .optional()?
@@ -97,17 +98,17 @@ impl<'conn> IndexBatch<'conn> {
                 touch_project(&self.tx, input.project_id.as_deref(), self.now)?;
                 UpsertOutcome::Added(obj_id)
             }
-            Some((obj_id, existing_proj, existing_hash, is_deleted, existing_noise)) => {
+            Some((obj_id, existing_proj, existing_hash, is_deleted, existing_noise, existing_kind)) => {
                 let was_deleted = is_deleted != 0;
                 if !was_deleted
                     && existing_hash == input.content_hash
                     && existing_proj == input.project_id
                 {
-                    if (existing_noise != 0) != input.is_noise {
-                        let mut stmt = self
-                            .tx
-                            .prepare_cached("UPDATE objects SET is_noise = ?1 WHERE id = ?2")?;
-                        stmt.execute(params![is_noise_int, obj_id])?;
+                    if (existing_noise != 0) != input.is_noise || existing_kind != input.kind.as_str() {
+                        let mut stmt = self.tx.prepare_cached(
+                            "UPDATE objects SET is_noise = ?1, kind = ?2 WHERE id = ?3",
+                        )?;
+                        stmt.execute(params![is_noise_int, input.kind.as_str(), obj_id])?;
                     }
                     debug!(path = %input.path, "object unchanged; skipped");
                     return Ok(UpsertOutcome::Unchanged(obj_id));
@@ -279,3 +280,4 @@ pub(crate) fn touch_project(
     }
     Ok(())
 }
+

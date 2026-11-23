@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.1"
 edition = "2024"
 license = "MIT"
 
@@ -29,5 +29,6 @@ vos-core = { path = "crates/vos-core" }
 vos-indexer = { path = "crates/vos-indexer" }
 vos-store = { path = "crates/vos-store" }
 ignore = "0.4"
+
 
 

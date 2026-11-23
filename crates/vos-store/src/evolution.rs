@@ -532,7 +532,37 @@ mod tests {
             .iter()
             .any(|f| f.evidence.iter().any(|ev| ev.contains("intelligence.rs"))));
     }
+
+    #[test]
+    fn config_files_do_not_trigger_documentation_drift() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("cfg", None, None).unwrap();
+        let now = now_unix();
+
+        let mut batch = store.begin_index_batch().unwrap();
+        for lang in ["en", "de", "es"] {
+            batch
+                .upsert_object(UpsertObjectInput {
+                    project_id: Some(proj.id.clone()),
+                    path: format!("/repo/locales/{lang}.json"),
+                    kind: ObjectKind::Config,
+                    title: format!("{lang}.json"),
+                    summary: None,
+                    content_hash: format!("h_{lang}"),
+                    size_bytes: 40,
+                    modified_at: now - 1000,
+                    is_noise: false,
+                    chunks: vec!["{\"hello\": \"world\"}".to_string()],
+                })
+                .unwrap();
+        }
+        batch.commit().unwrap();
+
+        let drift = store.project_drift("cfg").unwrap();
+        assert!(!drift.findings.iter().any(|f| f.kind == "documentation drift"));
+    }
 }
+
 
 
 
