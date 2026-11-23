@@ -30,7 +30,8 @@ To avoid building infrastructure before proving daily utility, v0.1 **must not**
 vos/ (repo root)
 ├── Cargo.toml                  # Workspace manifest
 ├── migrations/
-│   └── 0001_init.sql           # SQLite schema + FTS5 + triggers + indexes
+│   ├── 0001_init.sql           # SQLite schema + FTS5 + triggers + indexes
+│   └── 0002_noise.sql          # Noise classification column and indexes
 ├── apps/
 │   └── vos-cli/                # Binary `vos`: CLI parsing & terminal rendering only
 └── crates/
@@ -70,6 +71,7 @@ SQLite runs with `PRAGMA foreign_keys = ON;` and `PRAGMA journal_mode = WAL;`.
    - `indexed_at INTEGER NOT NULL`
    - `is_deleted INTEGER NOT NULL DEFAULT 0`
    - `deleted_at INTEGER`
+   - `is_noise INTEGER NOT NULL DEFAULT 0` (lockfiles, VCS/editor housekeeping)
 
 3. **`chunks`**
    - `id TEXT PRIMARY KEY`
@@ -88,7 +90,7 @@ SQLite runs with `PRAGMA foreign_keys = ON;` and `PRAGMA journal_mode = WAL;`.
    - `id INTEGER PRIMARY KEY AUTOINCREMENT`
    - `project_id TEXT REFERENCES projects(id) ON DELETE CASCADE`
    - `object_id TEXT REFERENCES objects(id) ON DELETE CASCADE`
-   - `event_type TEXT NOT NULL` (`added` | `modified` | `deleted` | `restored`)
+   - `event_type TEXT NOT NULL` (`added` | `modified` | `deleted` | `restored` | `tagged`)
    - `path TEXT NOT NULL`
    - `detail TEXT`
    - `created_at INTEGER NOT NULL`
@@ -123,8 +125,8 @@ Running `vos index <path>` must be **idempotent**:
 - `vos search <query> [--project <name>] [--limit <n>]`
 - `vos show <id_or_path>`
 - `vos tag <id_or_path> <tags...>`
-- `vos context <project>`
-- `vos timeline <project> [--limit <n>]`
+- `vos context <project> [--limit <n>] [--include-noise]`
+- `vos timeline <project> [--limit <n>] [--flat]`
 
 Global flag: `--db <path>` (or `VOS_DB` env var, defaulting to `~/.vos/vos.db`).
 
@@ -134,4 +136,5 @@ Global flag: `--db <path>` (or `VOS_DB` env var, defaulting to `~/.vos/vos.db`).
 
 - **v0.2 (Validation-driven):** PDF/rich metadata extractors, explicit `relations`, optional local embeddings if FTS5 misses semantic queries.
 - **v0.3 (Automation):** Background daemon (`vosd`) + filesystem watcher (`notify`) + local API.
+
 

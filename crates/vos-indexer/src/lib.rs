@@ -1,16 +1,16 @@
-//! Deterministic directory walker, text extractor, and idempotent indexer for VOS.
+//! Deterministic directory walker, text extractor, and single-transaction batch indexer for VOS.
 
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use ignore::WalkBuilder;
 use thiserror::Error;
 use tracing::{info, warn};
 use vos_core::VosError;
-use vos_core::util::{canonicalize_path, classify_path, fingerprint_file};
+use vos_core::util::{canonicalize_path, classify_path, fingerprint_file, is_noise_path};
 use vos_store::{Store, StoreError, UpsertObjectInput, UpsertOutcome};
 
 const MAX_TEXT_BYTES: u64 = 2 * 1024 * 1024;
@@ -49,7 +49,7 @@ pub struct IndexOptions {
     pub no_ignore: bool,
 }
 
-/// Summary counters produced by `index_path`.
+/// Summary counters and timing produced by `index_path`.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct IndexReport {
     pub scanned: usize,
@@ -59,6 +59,7 @@ pub struct IndexReport {
     pub unchanged: usize,
     pub deleted: usize,
     pub skipped: usize,
+    pub elapsed: Duration,
 }
 
 /// Scans `root` with default options and idempotently synchronizes into `store`.
@@ -70,13 +71,14 @@ pub fn index_path(
     index_path_with_options(store, root, project_name, IndexOptions::default())
 }
 
-/// Scans `root` and idempotently synchronizes objects, chunks, and deletions into `store`.
+/// Scans `root` and idempotently synchronizes objects, chunks, and deletions in one transaction.
 pub fn index_path_with_options(
     store: &mut Store,
     root: &Path,
     project_name: Option<&str>,
     options: IndexOptions,
 ) -> Result<IndexReport, IndexerError> {
+    let started = Instant::now();
     let canonical_root = canonicalize_path(root)?;
     let explicit_project_id = match project_name {
         Some(name) => {
@@ -92,6 +94,7 @@ pub fn index_path_with_options(
 
     let mut report = IndexReport::default();
     let mut seen_paths = HashSet::new();
+    let mut inputs = Vec::new();
 
     let mut builder = WalkBuilder::new(&canonical_root);
     builder
@@ -174,12 +177,13 @@ pub fn index_path_with_options(
         seen_paths.insert(canonical_file.clone());
 
         let kind = classify_path(path);
+        let is_noise = is_noise_path(path);
         let title = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| canonical_file.clone());
 
-        let (summary, chunks) = if kind.is_text_indexable() && size_bytes <= MAX_TEXT_BYTES {
+        let (summary, chunks) = if !is_noise && kind.is_text_indexable() && size_bytes <= MAX_TEXT_BYTES {
             match read_utf8_text(path) {
                 Some(text) => {
                     let sum = extract_summary(&text);
@@ -197,7 +201,7 @@ pub fn index_path_with_options(
             None => store.find_project_for_path(&canonical_file)?.map(|p| p.id),
         };
 
-        let outcome = store.upsert_object(UpsertObjectInput {
+        inputs.push(UpsertObjectInput {
             project_id,
             path: canonical_file,
             kind,
@@ -206,10 +210,14 @@ pub fn index_path_with_options(
             content_hash,
             size_bytes: size_bytes as i64,
             modified_at,
+            is_noise,
             chunks,
-        })?;
+        });
+    }
 
-        match outcome {
+    let mut batch = store.begin_index_batch()?;
+    for input in inputs {
+        match batch.upsert_object(input)? {
             UpsertOutcome::Added(_) => report.added += 1,
             UpsertOutcome::Modified(_) => report.modified += 1,
             UpsertOutcome::Restored(_) => report.restored += 1,
@@ -217,11 +225,13 @@ pub fn index_path_with_options(
         }
     }
 
-    report.deleted = store.mark_missing_deleted(
+    report.deleted = batch.mark_missing_deleted(
         &canonical_root,
         explicit_project_id.as_deref(),
         &seen_paths,
     )?;
+    batch.commit()?;
+    report.elapsed = started.elapsed();
 
     info!(
         scanned = report.scanned,
@@ -231,6 +241,7 @@ pub fn index_path_with_options(
         unchanged = report.unchanged,
         deleted = report.deleted,
         skipped = report.skipped,
+        elapsed_ms = report.elapsed.as_millis(),
         "completed indexing run"
     );
 
@@ -355,7 +366,6 @@ mod tests {
             "# Architecture\nWait-free scheduler notes.\n",
         )
         .unwrap();
-        // Should be ignored because it sits inside `target/`
         fs::write(proj_dir.join("target/ignored.rs"), "fn ignored() {}").unwrap();
 
         let mut store = Store::open_in_memory().unwrap();
@@ -395,7 +405,7 @@ mod tests {
             1
         );
 
-        let ctx = store.project_context("demo", 10).unwrap();
+        let ctx = store.project_context("demo", 10, false).unwrap();
         assert_eq!(ctx.active_objects, 1);
         assert_eq!(ctx.deleted_objects, 1);
         assert_eq!(ctx.recent_events.len(), 4);
@@ -414,7 +424,7 @@ mod tests {
         store.create_project("ign", Some(&proj_dir), None).unwrap();
 
         let r1 = index_path(&mut store, &proj_dir, Some("ign")).unwrap();
-        assert_eq!(r1.scanned, 2); // .vosignore + main.rs
+        assert_eq!(r1.scanned, 2);
 
         let r2 = index_path_with_options(
             &mut store,

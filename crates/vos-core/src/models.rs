@@ -40,6 +40,18 @@ impl ObjectKind {
     pub fn is_text_indexable(&self) -> bool {
         matches!(self, Self::Code | Self::Note)
     }
+
+    /// Relative priority used to surface human-meaningful files in `vos context`.
+    pub fn context_priority(&self) -> i64 {
+        match self {
+            Self::Note => 100,
+            Self::Doc => 90,
+            Self::Code => 80,
+            Self::Model => 70,
+            Self::Media => 20,
+            Self::Other => 10,
+        }
+    }
 }
 
 impl fmt::Display for ObjectKind {
@@ -49,12 +61,13 @@ impl fmt::Display for ObjectKind {
 }
 
 /// Lifecycle event recorded for project timeline recovery.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventType {
     Added,
     Modified,
     Deleted,
     Restored,
+    Tagged,
 }
 
 impl EventType {
@@ -65,6 +78,7 @@ impl EventType {
             Self::Modified => "modified",
             Self::Deleted => "deleted",
             Self::Restored => "restored",
+            Self::Tagged => "tagged",
         }
     }
 
@@ -75,6 +89,7 @@ impl EventType {
             "modified" => Self::Modified,
             "deleted" => Self::Deleted,
             "restored" => Self::Restored,
+            "tagged" => Self::Tagged,
             _ => Self::Modified,
         }
     }
@@ -121,6 +136,7 @@ pub struct ObjectRecord {
     pub indexed_at: i64,
     pub is_deleted: bool,
     pub deleted_at: Option<i64>,
+    pub is_noise: bool,
 }
 
 /// Detailed view of a single object including tags and project metadata.
@@ -162,7 +178,9 @@ pub struct ProjectContext {
     pub project: Project,
     pub active_objects: usize,
     pub deleted_objects: usize,
+    pub noise_objects: usize,
     pub counts_by_kind: Vec<(String, usize)>,
     pub recent_objects: Vec<ObjectRecord>,
+    pub noise_sample: Vec<ObjectRecord>,
     pub recent_events: Vec<EventRecord>,
 }

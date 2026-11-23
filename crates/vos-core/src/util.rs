@@ -148,6 +148,31 @@ pub fn fingerprint_file(path: &Path, size_bytes: u64) -> Result<String, VosError
     }
     Ok(hex)
 }
+
+/// Returns true for lockfiles and VCS/editor housekeeping files that add noise to `vos context`.
+pub fn is_noise_path(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+        return false;
+    };
+
+    matches!(
+        name,
+        ".gitignore"
+            | ".gitattributes"
+            | ".gitmodules"
+            | ".editorconfig"
+            | ".DS_Store"
+            | "Thumbs.db"
+            | "Cargo.lock"
+            | "package-lock.json"
+            | "pnpm-lock.yaml"
+            | "yarn.lock"
+            | "bun.lockb"
+            | "poetry.lock"
+            | "uv.lock"
+            | "flake.lock"
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +193,14 @@ mod tests {
         assert!(is_path_within("/work/vos", "/work/vos"));
         assert!(!is_path_within("/work/vos2/src/lib.rs", "/work/vos"));
     }
+
+    #[test]
+    fn noise_detection_matches_lockfiles_and_vcs_files() {
+        assert!(is_noise_path(Path::new("/repo/.gitignore")));
+        assert!(is_noise_path(Path::new("/repo/Cargo.lock")));
+        assert!(!is_noise_path(Path::new("/repo/Cargo.toml")));
+        assert!(!is_noise_path(Path::new("/repo/ROADMAP.md")));
+    }
 }
+
 

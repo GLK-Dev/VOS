@@ -1,5 +1,6 @@
 //! Command-line interface for VOS (Project Memory System).
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -66,21 +67,27 @@ enum Commands {
         #[arg(required = true)]
         tags: Vec<String>,
     },
-    /// Recover current project context (active files, breakdown, recent timeline).
+    /// Recover current project context (prioritized files, breakdown, recent timeline).
     Context {
         /// Project name.
         project: String,
         /// Maximum number of recent objects and events to show.
         #[arg(long, default_value_t = 8)]
         limit: usize,
+        /// Include lockfiles and VCS/editor housekeeping files in recent activity.
+        #[arg(long)]
+        include_noise: bool,
     },
-    /// Show chronological project events (added, modified, deleted, restored).
+    /// Show chronological project events grouped by day and event type.
     Timeline {
         /// Project name.
         project: String,
         /// Maximum number of events to show.
-        #[arg(long, default_value_t = 20)]
+        #[arg(long, default_value_t = 30)]
         limit: usize,
+        /// Show flat timestamped lines instead of grouping by day.
+        #[arg(long)]
+        flat: bool,
     },
 }
 
@@ -146,23 +153,31 @@ fn main() -> Result<()> {
                 }
             }
         },
-        Commands::Index { path, project, no_ignore } => {
+        Commands::Index {
+            path,
+            project,
+            no_ignore,
+        } => {
             let report = index_path_with_options(
                 &mut store,
                 &path,
                 project.as_deref(),
                 IndexOptions { no_ignore },
             )?;
+            println!("Scanned:   {}", report.scanned);
             println!(
-                "Indexed {} file(s): added={}, modified={}, restored={}, unchanged={}, deleted={}, skipped={}",
-                report.scanned,
+                "Updated:   {} (added: {}, modified: {}, restored: {})",
+                report.added + report.modified + report.restored,
                 report.added,
                 report.modified,
-                report.restored,
-                report.unchanged,
-                report.deleted,
-                report.skipped
+                report.restored
             );
+            println!("Unchanged: {}", report.unchanged);
+            println!("Deleted:   {}", report.deleted);
+            if report.skipped > 0 {
+                println!("Skipped:   {}", report.skipped);
+            }
+            println!("Elapsed:   {:.2}s", report.elapsed.as_secs_f64());
         }
         Commands::Search {
             query,
@@ -195,7 +210,11 @@ fn main() -> Result<()> {
             let obj = &details.object;
             println!("Object: {} ({})", obj.title, obj.id);
             println!("Path:   {}", obj.path);
-            println!("Kind:   {}", obj.kind);
+            println!(
+                "Kind:   {}{}",
+                obj.kind,
+                if obj.is_noise { " (noise)" } else { "" }
+            );
             println!(
                 "Project: {}",
                 details.project_name.as_deref().unwrap_or("-")
@@ -221,19 +240,25 @@ fn main() -> Result<()> {
             let obj = store.add_tags(&target, &tags)?;
             println!("Tagged '{}' ({}) with: {}", obj.title, obj.id, tags.join(", "));
         }
-        Commands::Context { project, limit } => {
-            let ctx = store.project_context(&project, limit)?;
+        Commands::Context {
+            project,
+            limit,
+            include_noise,
+        } => {
+            let ctx = store.project_context(&project, limit, include_noise)?;
+            let root_prefix = ctx.project.root_path.as_deref().unwrap_or("");
             println!("Project: {} ({})", ctx.project.name, ctx.project.id);
             if let Some(ref desc) = ctx.project.description {
                 println!("About:   {desc}");
             }
-            if let Some(ref root) = ctx.project.root_path {
-                println!("Root:    {root}");
+            if !root_prefix.is_empty() {
+                println!("Root:    {root_prefix}");
             }
             println!(
-                "Objects: {} active, {} deleted | Updated: {}",
+                "Objects: {} active, {} deleted, {} noise | Updated: {}",
                 ctx.active_objects,
                 ctx.deleted_objects,
+                ctx.noise_objects,
                 format_ts(ctx.project.updated_at)
             );
             if !ctx.counts_by_kind.is_empty() {
@@ -245,48 +270,105 @@ fn main() -> Result<()> {
                 println!("Kinds:   {}", breakdown.join(", "));
             }
 
-            println!("\nRecent files:");
+            println!("\nImportant recent files:");
             if ctx.recent_objects.is_empty() {
                 println!("  (none)");
             } else {
-                let root_prefix = ctx.project.root_path.as_deref().unwrap_or("");
-                for obj in ctx.recent_objects {
+                for obj in &ctx.recent_objects {
                     let display_path = display_relative(&obj.path, root_prefix);
+                    let noise_tag = if obj.is_noise { " [noise]" } else { "" };
                     println!(
-                        "  - [{}] {} ({})",
+                        "  - [{}] {}{} ({})",
                         obj.kind,
                         display_path,
+                        noise_tag,
                         format_ts(obj.modified_at)
                     );
                 }
+            }
+
+            if !include_noise && ctx.noise_objects > 0 {
+                let sample: Vec<&str> = ctx
+                    .noise_sample
+                    .iter()
+                    .take(4)
+                    .map(|o| o.title.as_str())
+                    .collect();
+                println!(
+                    "\nHidden noise: {} file(s) ({})",
+                    ctx.noise_objects,
+                    sample.join(", ")
+                );
             }
 
             println!("\nRecent activity:");
             if ctx.recent_events.is_empty() {
                 println!("  (none)");
             } else {
-                for ev in ctx.recent_events {
+                for ev in &ctx.recent_events {
+                    let display_path = display_relative(&ev.path, root_prefix);
                     println!(
                         "  - {} | {:8} | {}",
                         format_ts(ev.created_at),
                         ev.event_type,
-                        ev.path
+                        display_path
                     );
                 }
             }
         }
-        Commands::Timeline { project, limit } => {
+        Commands::Timeline {
+            project,
+            limit,
+            flat,
+        } => {
+            let proj = store.get_project_by_name(&project)?;
+            let root_prefix = proj
+                .as_ref()
+                .and_then(|p| p.root_path.as_deref())
+                .unwrap_or("");
             let events = store.project_timeline(&project, limit)?;
+
             if events.is_empty() {
                 println!("No events recorded for project '{project}'.");
-            } else {
+            } else if flat {
                 for ev in events {
+                    let display_path = display_relative(&ev.path, root_prefix);
                     println!(
                         "{} | {:8} | {}",
                         format_ts(ev.created_at),
                         ev.event_type,
-                        ev.path
+                        display_path
                     );
+                }
+            } else {
+                let mut grouped: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
+                for ev in events {
+                    let day = format_day(ev.created_at);
+                    let kind = ev.event_type.as_str().to_string();
+                    let rel = display_relative(&ev.path, root_prefix);
+                    let entry = match ev.detail {
+                        Some(ref d) => format!("{rel} [{d}]"),
+                        None => rel.to_string(),
+                    };
+                    let list = grouped
+                        .entry(day)
+                        .or_default()
+                        .entry(kind)
+                        .or_default();
+                    if !list.contains(&entry) {
+                        list.push(entry);
+                    }
+                }
+
+                for (day, by_type) in grouped.into_iter().rev() {
+                    println!("{day}");
+                    for (kind, items) in by_type {
+                        println!("\n{kind}:");
+                        for item in items {
+                            println!("  - {item}");
+                        }
+                    }
+                    println!();
                 }
             }
         }
@@ -295,9 +377,23 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn default_db_path() -> PathBuf {
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
+    match home {
+        Some(dir) => PathBuf::from(dir).join(".vos").join("vos.db"),
+        None => PathBuf::from(".vos").join("vos.db"),
+    }
+}
+
 fn format_ts(ts: i64) -> String {
     DateTime::from_timestamp(ts, 0)
         .map(|dt| dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| ts.to_string())
+}
+
+fn format_day(ts: i64) -> String {
+    DateTime::from_timestamp(ts, 0)
+        .map(|dt| dt.with_timezone(&Local).format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| ts.to_string())
 }
 
@@ -310,13 +406,4 @@ fn display_relative<'a>(path: &'a str, root: &str) -> &'a str {
         .map(|rest| rest.trim_start_matches(['/', '\\']))
         .filter(|rest| !rest.is_empty())
         .unwrap_or(path)
-}
-
-fn default_db_path() -> PathBuf {
-    let home = std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"));
-    match home {
-        Some(dir) => PathBuf::from(dir).join(".vos").join("vos.db"),
-        None => PathBuf::from(".vos").join("vos.db"),
-    }
 }
