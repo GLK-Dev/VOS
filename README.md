@@ -6,16 +6,16 @@ See [SPEC.md](SPEC.md) for the canonical specification and [AGENTS.md](AGENTS.md
 
 ## Project Status
 
-**Version:** VOS v1.1.0 (Insight Layer)
+**Version:** VOS v1.1.1 (Insight Layer + Entry Command Integration)
 
-**Status:** Insight Layer (`graph`, `ownership`, `coverage` shipped; `snapshot` and `session` deferred pending Recovery Benchmark data)
+**Status:** Insight Layer Integrated (`graph`, `ownership`, `coverage` feeding `continue`, `status`, `drift`; `snapshot` and `session` deferred)
 
 ### Validation Summary
 
 - 10 real projects indexed
 - 778 active files
 - 20/20 recovery scenarios passed
-- 30/30 tests passing
+- 32/32 tests passing
 - 0 clippy warnings
 
 ### Search Benchmark

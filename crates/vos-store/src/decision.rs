@@ -3,11 +3,12 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::params;
 use vos_core::util::now_unix;
 use vos_core::{
-    ChangedSinceReport, ConceptExplanation, ObjectKind, ObjectRecord, ProjectHealth, ProjectStatus,
+    ChangedSinceReport, ConceptExplanation, DocumentationHealth, GraphDirection, ObjectKind, ObjectRecord, ProjectHealth, ProjectStatus,
 };
 
 use crate::concepts::ConceptDictionary;
 use crate::queries::map_object_row;
+use crate::recovery::object_area;
 use crate::{Store, StoreError};
 
 const ACTIVE_WINDOW_SECS: i64 = 21 * 86_400;
@@ -50,13 +51,82 @@ impl Store {
             .collect();
 
         let (open_questions, pending_work) = self.scan_project_markers(&resume.project.id)?;
-        let risk_areas = self.compute_risk_areas(
+        let mut risk_areas = self.compute_risk_areas(
             &resume.project.id,
             resume.active_objects,
             deleted_count,
             health,
             resume.last_activity_at,
         )?;
+
+        let coverage = self.project_coverage(project_name)?;
+        let ownership = self.project_ownership(project_name, 14, 5)?;
+        let graph = self.project_graph(project_name, None, GraphDirection::Both, 1, 5)?;
+
+        let documentation_health = if resume.active_objects == 0
+            || (coverage.doc_files == 0 && coverage.code_files == 0)
+        {
+            DocumentationHealth::Empty
+        } else if coverage.doc_files == 0 {
+            DocumentationHealth::Low
+        } else if coverage.underdocumented.is_empty()
+            || (coverage.coverage_ratio >= 25.0
+                && coverage.well_covered.len() >= coverage.underdocumented.len())
+        {
+            DocumentationHealth::Good
+        } else if coverage.coverage_ratio >= 10.0
+            || !coverage.well_covered.is_empty()
+            || !coverage.partially_covered.is_empty()
+        {
+            DocumentationHealth::Partial
+        } else {
+            DocumentationHealth::Low
+        };
+
+        let root_prefix = resume.project.root_path.as_deref().unwrap_or("");
+        let mut dependency_hubs = Vec::new();
+        let mut seen_hub_areas = HashSet::new();
+        for hub in &graph.hubs {
+            let deg = hub.outgoing_count + hub.incoming_count;
+            if deg == 0 {
+                continue;
+            }
+            let area = object_area(&hub.object.path, root_prefix);
+            let label = if area == "(root)" {
+                hub.object.title.clone()
+            } else {
+                area
+            };
+            if seen_hub_areas.insert(label.clone()) {
+                dependency_hubs.push(format!("{label} ({deg} relations)"));
+            }
+            if dependency_hubs.len() >= 4 {
+                break;
+            }
+        }
+
+        // Cross ownership + coverage signal: high activity + underdocumented area
+        let underdoc_areas: HashSet<&str> = coverage
+            .underdocumented
+            .iter()
+            .map(|c| c.area.as_str())
+            .collect();
+        let mut extra_risks = 0_usize;
+        for area in &ownership.most_active_areas {
+            if underdoc_areas.contains(area.area.as_str()) {
+                let entry = format!(
+                    "{} — high activity + low coverage ({} files, 0 docs/refs)",
+                    area.area, area.file_count
+                );
+                if !risk_areas.contains(&entry) {
+                    risk_areas.push(entry);
+                    extra_risks += 1;
+                    if extra_risks >= 2 {
+                        break;
+                    }
+                }
+            }
+        }
 
         Ok(ProjectStatus {
             project: resume.project,
@@ -68,6 +138,9 @@ impl Store {
             open_questions,
             pending_work,
             active_areas: resume.most_active_areas,
+            coverage_ratio: coverage.coverage_ratio,
+            documentation_health,
+            dependency_hubs,
             risk_areas,
         })
     }

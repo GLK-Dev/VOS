@@ -182,7 +182,7 @@ impl Store {
         }
 
         let max_depth = depth.clamp(1, 5);
-        let max_hubs = limit.clamp(1, 25);
+        let max_hubs = limit.clamp(1, 500);
 
         let (target_obj, hubs) = if let Some(target_arg) = target {
             let details = self.show_object_scoped(target_arg, Some(&project.name))?;

@@ -693,6 +693,17 @@ fn main() -> Result<()> {
                 }
             }
 
+            println!("\nKnowledge coverage:");
+            println!("  Coverage Ratio: {:.1}%", st.coverage_ratio);
+            println!("  Documentation Health: {}", st.documentation_health);
+
+            if !st.dependency_hubs.is_empty() {
+                println!("\nDependency hubs:");
+                for hub in &st.dependency_hubs {
+                    println!("  - {hub}");
+                }
+            }
+
             println!("\nRisk areas:");
             if st.risk_areas.is_empty() {
                 println!("  (none detected)");
@@ -843,6 +854,34 @@ fn main() -> Result<()> {
                         area.area,
                         area.object_count,
                         format_day(area.latest_modified_at)
+                    );
+                }
+            }
+
+            if !cont.ownership_areas.is_empty() {
+                println!("\nOwnership hotspots (events):");
+                for area in cont.ownership_areas.iter().take(4) {
+                    println!("  - {} ({} files, {} events)", area.area, area.file_count, area.event_count);
+                }
+            }
+
+            if !cont.coverage_warnings.is_empty() {
+                println!("\nCoverage warnings (underdocumented):");
+                for cov in cont.coverage_warnings.iter().take(4) {
+                    println!("  - {} ({} code files, 0 docs/refs)", cov.area, cov.code_files);
+                }
+            }
+
+            if !cont.dependency_hubs.is_empty() {
+                println!("\nDependency hubs:");
+                for hub in cont.dependency_hubs.iter().take(4) {
+                    let rel = display_relative(&hub.object.path, root_prefix);
+                    println!(
+                        "  - {} ({} relations: {} out, {} in)",
+                        rel,
+                        hub.outgoing_count + hub.incoming_count,
+                        hub.outgoing_count,
+                        hub.incoming_count
                     );
                 }
             }

@@ -389,4 +389,80 @@ mod tests {
         );
         assert!(cov.underdocumented.iter().any(|a| a.area == "src/net" && a.code_files == 2));
     }
+
+    #[test]
+    fn continue_status_and_drift_aggregate_insight_layer_signals() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("fusion", None, None).unwrap();
+        let now = now_unix();
+
+        let mut batch = store.begin_index_batch().unwrap();
+        let id_hub = batch
+            .upsert_object(obj_input(&proj.id, "src/core/mod.rs", ObjectKind::Code, now - 60))
+            .unwrap()
+            .object_id()
+            .to_string();
+        let id_a = batch
+            .upsert_object(obj_input(&proj.id, "src/core/a.rs", ObjectKind::Code, now - 120))
+            .unwrap()
+            .object_id()
+            .to_string();
+        let id_b = batch
+            .upsert_object(obj_input(&proj.id, "src/core/b.rs", ObjectKind::Code, now - 180))
+            .unwrap()
+            .object_id()
+            .to_string();
+        let id_c = batch
+            .upsert_object(obj_input(&proj.id, "src/core/c.rs", ObjectKind::Code, now - 240))
+            .unwrap()
+            .object_id()
+            .to_string();
+        let _id_readme = batch
+            .upsert_object(obj_input(&proj.id, "README.md", ObjectKind::Note, now - 300))
+            .unwrap();
+
+        batch
+            .sync_relations(
+                std::slice::from_ref(&id_hub),
+                &[
+                    RelationInput {
+                        from_object_id: id_hub.clone(),
+                        to_object_id: id_a,
+                        relation_type: RelationType::RustMod,
+                        confidence: 1.0,
+                        detail: Some("mod a".to_string()),
+                    },
+                    RelationInput {
+                        from_object_id: id_hub.clone(),
+                        to_object_id: id_b,
+                        relation_type: RelationType::RustMod,
+                        confidence: 1.0,
+                        detail: Some("mod b".to_string()),
+                    },
+                    RelationInput {
+                        from_object_id: id_hub.clone(),
+                        to_object_id: id_c,
+                        relation_type: RelationType::RustMod,
+                        confidence: 1.0,
+                        detail: Some("mod c".to_string()),
+                    },
+                ],
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let cont = store.project_continue("fusion").unwrap();
+        assert!(!cont.dependency_hubs.is_empty());
+        assert!(!cont.coverage_warnings.is_empty());
+        assert!(!cont.ownership_areas.is_empty());
+        assert!(cont.continue_from.iter().any(|s| s.reason.contains("Hub node")));
+
+        let status = store.project_status("fusion").unwrap();
+        assert!((status.coverage_ratio - 25.0).abs() < 0.1);
+        assert!(!status.dependency_hubs.is_empty());
+        assert!(status.risk_areas.iter().any(|r| r.contains("high activity + low coverage")));
+
+        let drift = store.project_drift("fusion").unwrap();
+        assert!(drift.findings.iter().any(|f| f.kind == "structural risk drift" && f.summary.contains("src/core")));
+    }
 }

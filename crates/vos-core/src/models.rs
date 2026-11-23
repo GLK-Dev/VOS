@@ -301,6 +301,9 @@ pub struct ProjectContinue {
     pub continue_from: Vec<ContinueSuggestion>,
     pub recent_events: Vec<EventRecord>,
     pub open_questions: Vec<String>,
+    pub ownership_areas: Vec<AreaOwnership>,
+    pub coverage_warnings: Vec<AreaCoverage>,
+    pub dependency_hubs: Vec<GraphHub>,
 }
 /// Combined daily-launch briefing returned by os start <project>.
 /// Combined daily-launch briefing returned by `vos start <project>`.
@@ -442,6 +445,9 @@ pub struct ProjectStatus {
     pub open_questions: Vec<String>,
     pub pending_work: Vec<String>,
     pub active_areas: Vec<ActiveArea>,
+    pub coverage_ratio: f64,
+    pub documentation_health: DocumentationHealth,
+    pub dependency_hubs: Vec<String>,
     pub risk_areas: Vec<String>,
 }
 
@@ -686,4 +692,53 @@ pub struct ProjectCoverage {
     pub well_covered: Vec<AreaCoverage>,
     pub partially_covered: Vec<AreaCoverage>,
     pub underdocumented: Vec<AreaCoverage>,
+}
+/// Overall documentation health tier reported by `vos status <project>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentationHealth {
+    Good,
+    Partial,
+    Low,
+    Empty,
+}
+
+impl DocumentationHealth {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Good => "Good",
+            Self::Partial => "Partial",
+            Self::Low => "Low",
+            Self::Empty => "Empty",
+        }
+    }
+}
+
+impl fmt::Display for DocumentationHealth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Risk tier for deterministic structural drift scoring (`vos drift`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RiskLevel {
+    High,
+    Medium,
+    Low,
+}
+
+impl RiskLevel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::High => "High Risk",
+            Self::Medium => "Medium Risk",
+            Self::Low => "Low Risk",
+        }
+    }
+}
+
+impl fmt::Display for RiskLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }

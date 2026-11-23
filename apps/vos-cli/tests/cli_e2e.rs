@@ -303,3 +303,39 @@ fn cli_reports_activity_ownership_and_relation_weighted_coverage() {
     assert!(cov_out.contains("Underdocumented"));
     assert!(cov_out.contains("src/net"));
 }
+
+#[test]
+fn cli_continue_status_and_drift_surface_insight_layer_signals() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("hubrepo");
+    fs::create_dir_all(proj.join("src/engine")).unwrap();
+
+    fs::write(proj.join("README.md"), "# HubRepo\nOverview doc.\n").unwrap();
+    fs::write(
+        proj.join("src/engine/mod.rs"),
+        "pub mod a;\npub mod b;\npub mod c;\n",
+    )
+    .unwrap();
+    fs::write(proj.join("src/engine/a.rs"), "pub fn a() {}\n").unwrap();
+    fs::write(proj.join("src/engine/b.rs"), "pub fn b() {}\n").unwrap();
+    fs::write(proj.join("src/engine/c.rs"), "pub fn c() {}\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "hubrepo", proj.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "hubrepo"]);
+
+    let cont_out = assert_vos_ok(&db, &["continue", "hubrepo"]);
+    assert!(cont_out.contains("Hub node (3 relations)"));
+    assert!(cont_out.contains("Ownership hotspots"));
+    assert!(cont_out.contains("Coverage warnings"));
+    assert!(cont_out.contains("Dependency hubs"));
+
+    let status_out = assert_vos_ok(&db, &["status", "hubrepo"]);
+    assert!(status_out.contains("Knowledge coverage:"));
+    assert!(status_out.contains("Documentation Health:"));
+    assert!(status_out.contains("high activity + low coverage"));
+
+    let drift_out = assert_vos_ok(&db, &["drift", "hubrepo"]);
+    assert!(drift_out.contains("[structural risk drift]"));
+    assert!(drift_out.contains("src/engine"));
+}

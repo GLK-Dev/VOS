@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use rusqlite::params;
-use vos_core::{DriftFinding, ObjectKind, ObjectRecord, ProjectDrift, ProjectEvolution};
+use vos_core::{CoverageTier, DriftFinding, GraphDirection, ObjectKind, ObjectRecord, ProjectDrift, ProjectEvolution, RiskLevel};
 
 use crate::queries::map_object_row;
 use crate::recovery::object_area;
@@ -285,6 +285,98 @@ impl Store {
                     evidence: matching_files,
                 });
             }
+        }
+
+        // 4. Structural graph risk drift: risk_score = relation_count * 2 + recent_activity - coverage_score
+        let ownership = self.project_ownership(project_name, 14, 200)?;
+        let coverage = self.project_coverage(project_name)?;
+        let graph = self.project_graph(project_name, None, GraphDirection::Both, 1, 500)?;
+
+        let mut rel_count_by_area: HashMap<String, usize> = HashMap::new();
+        let mut top_hub_by_area: HashMap<String, String> = HashMap::new();
+        for hub in &graph.hubs {
+            let area = object_area(&hub.object.path, root_prefix);
+            let deg = hub.outgoing_count + hub.incoming_count;
+            if deg == 0 {
+                continue;
+            }
+            *rel_count_by_area.entry(area.clone()).or_insert(0) += deg;
+            top_hub_by_area.entry(area).or_insert_with(|| {
+                let rel_path = if !trimmed_root.is_empty() {
+                    hub.object
+                        .path
+                        .strip_prefix(trimmed_root)
+                        .map(|r| r.trim_start_matches(['/', '\\']))
+                        .unwrap_or(&hub.object.path)
+                } else {
+                    &hub.object.path
+                };
+                format!("{rel_path} ({deg} relations)")
+            });
+        }
+
+        let recent_by_area: HashMap<String, usize> = ownership
+            .most_active_areas
+            .into_iter()
+            .map(|a| (a.area, a.recent_modified_count))
+            .collect();
+
+        let mut scored_risks = Vec::new();
+        for cov in coverage
+            .underdocumented
+            .into_iter()
+            .chain(coverage.partially_covered)
+        {
+            let relation_count = rel_count_by_area.get(&cov.area).copied().unwrap_or(0);
+            if relation_count < 3 {
+                continue;
+            }
+            let recent_activity = recent_by_area.get(&cov.area).copied().unwrap_or(0);
+            let risk_score = (relation_count as f64) * 2.0
+                + (recent_activity as f64)
+                - cov.weighted_score;
+            let level = if risk_score >= 15.0 {
+                RiskLevel::High
+            } else if risk_score >= 6.0 {
+                RiskLevel::Medium
+            } else {
+                RiskLevel::Low
+            };
+
+            if cov.tier == CoverageTier::Underdocumented || level != RiskLevel::Low {
+                scored_risks.push((risk_score, level, cov, relation_count, recent_activity));
+            }
+        }
+
+        scored_risks.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| b.3.cmp(&a.3)));
+
+        for (risk_score, level, cov, relation_count, recent_activity) in
+            scored_risks.into_iter().take(3)
+        {
+            let cov_label = match cov.tier {
+                CoverageTier::Underdocumented => "Low (0 docs/refs)",
+                CoverageTier::PartiallyCovered => "Partial",
+                CoverageTier::WellCovered => "Well Covered",
+            };
+            let mut evidence = vec![
+                format!("Relations: {relation_count}"),
+                format!(
+                    "Coverage: {cov_label} (score: {:.1}, code files: {})",
+                    cov.weighted_score, cov.code_files
+                ),
+                format!("Recent activity (14d): {recent_activity} modified"),
+            ];
+            if let Some(hub) = top_hub_by_area.get(&cov.area) {
+                evidence.push(format!("Top hub: {hub}"));
+            }
+            findings.push(DriftFinding {
+                kind: "structural risk drift".to_string(),
+                summary: format!(
+                    "Area '{}' is a core dependency hub — {} (score: {:.1})",
+                    cov.area, level, risk_score
+                ),
+                evidence,
+            });
         }
 
         Ok(ProjectDrift { project, findings })

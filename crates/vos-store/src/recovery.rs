@@ -165,22 +165,49 @@ impl Store {
         let resume = start.resume;
         let root_prefix = resume.project.root_path.as_deref().unwrap_or("");
 
+        let ownership = self.project_ownership(project_name, 14, 4)?;
+        let coverage = self.project_coverage(project_name)?;
+        let graph = self.project_graph(project_name, None, GraphDirection::Both, 1, 4)?;
+
+        let mut hub_degrees: HashMap<String, usize> = HashMap::new();
+        for hub in &graph.hubs {
+            hub_degrees.insert(hub.object.id.clone(), hub.outgoing_count + hub.incoming_count);
+        }
+
         let mut continue_from = Vec::new();
         let mut seen_ids = HashSet::new();
 
-        // 1. Primary anchor document (e.g., ROADMAP.md / SPEC.md / README.md)
+        // 1. Primary dependency hub when strongly connected (>= 3 relations)
+        if let Some(top_hub) = graph.hubs.first() {
+            let deg = top_hub.outgoing_count + top_hub.incoming_count;
+            if deg >= 3 {
+                seen_ids.insert(top_hub.object.id.clone());
+                continue_from.push(ContinueSuggestion {
+                    object: top_hub.object.clone(),
+                    reason: format!("Hub node ({deg} relations)"),
+                });
+            }
+        }
+
+        // 2. Primary anchor document (e.g., ROADMAP.md / SPEC.md / README.md)
         for sp in &resume.starting_points {
             if continue_from.len() >= 2 {
                 break;
             }
+            if seen_ids.contains(&sp.id) {
+                continue;
+            }
             let area = object_area(&sp.path, root_prefix);
-            let reason = if sp.title.eq_ignore_ascii_case("roadmap.md")
+            let mut reason = if sp.title.eq_ignore_ascii_case("roadmap.md")
                 || sp.title.eq_ignore_ascii_case("spec.md")
             {
                 format!("key roadmap/spec entry point (area: {area})")
             } else {
                 format!("project entry point (area: {area})")
             };
+            if let Some(deg) = hub_degrees.get(&sp.id).copied().filter(|d| *d >= 2) {
+                reason.push_str(&format!(" | hub node ({deg} relations)"));
+            }
             seen_ids.insert(sp.id.clone());
             continue_from.push(ContinueSuggestion {
                 object: sp.clone(),
@@ -188,18 +215,18 @@ impl Store {
             });
         }
 
-        // 2. Most recent active code file not already included (enriched by dependency degree)
+        // 3. Most recent active code file not already included (enriched by dependency degree)
         if let Some(code_obj) = resume
             .recently_modified
             .iter()
             .find(|o| o.kind == ObjectKind::Code && !seen_ids.contains(&o.id))
         {
             let area = object_area(&code_obj.path, root_prefix);
-            let incoming_cnt = self
-                .object_relations(&code_obj.id, GraphDirection::Incoming)?
+            let deg = self
+                .object_relations(&code_obj.id, GraphDirection::Both)?
                 .len();
-            let reason = if incoming_cnt > 0 {
-                format!("latest code activity (area: {area}, {incoming_cnt} incoming refs)")
+            let reason = if deg > 0 {
+                format!("latest code activity (area: {area}, {deg} relations)")
             } else {
                 format!("latest code activity (area: {area})")
             };
@@ -210,7 +237,7 @@ impl Store {
             });
         }
 
-        // 3. Fill up to 4 with top remaining recently modified items
+        // 4. Fill up to 4 with top remaining recently modified items
         for obj in &resume.recently_modified {
             if continue_from.len() >= 4 {
                 break;
@@ -225,11 +252,16 @@ impl Store {
             }
         }
 
+        let coverage_warnings = coverage.underdocumented.into_iter().take(4).collect();
+
         Ok(ProjectContinue {
             resume,
             continue_from,
             recent_events: start.recent_events,
             open_questions: start.open_questions,
+            ownership_areas: ownership.most_active_areas,
+            coverage_warnings,
+            dependency_hubs: graph.hubs,
         })
     }
     /// Builds a unified project kickoff briefing combining resume, recent activity, and open markers.
