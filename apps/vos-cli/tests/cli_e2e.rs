@@ -560,3 +560,43 @@ fn cli_all_index_status_and_live_snapshot_diff_work_end_to_end() {
     let snaps_arr: Vec<serde_json::Value> = serde_json::from_str(&snaps_json).expect("snapshots json");
     assert_eq!(snaps_arr.len(), 1);
 }
+
+#[test]
+fn cli_session_stop_auto_reindexes_disk_edits_unless_no_index_is_set() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("sessproj");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("README.md"), "# SessProj\n").unwrap();
+    fs::write(proj.join("src/lib.rs"), "pub fn v1() {}\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "sessproj", proj.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "sessproj"]);
+    std::thread::sleep(std::time::Duration::from_millis(1050));
+
+    assert_vos_ok(&db, &["session", "start", "sessproj", "--note", "auto-refresh test"]);
+    // Sleep across a 1-second boundary so file mtime and index event strictly follow started_at.
+    std::thread::sleep(std::time::Duration::from_millis(1050));
+    fs::write(proj.join("src/new_mod.rs"), "pub fn added() {}\n").unwrap();
+
+    let stop_auto = assert_vos_ok(
+        &db,
+        &["session", "stop", "sessproj", "--quality", "5", "--json"],
+    );
+    let val_auto: serde_json::Value = serde_json::from_str(&stop_auto).expect("stop auto json");
+    assert_eq!(val_auto["files_changed_count"], 1);
+    assert_eq!(val_auto["productive_areas"], serde_json::json!(["src"]));
+
+    // With `--no-index`, unindexed disk edits are ignored until next `vos index`.
+    std::thread::sleep(std::time::Duration::from_millis(1050));
+    assert_vos_ok(&db, &["session", "start", "sessproj", "--no-index"]);
+    std::thread::sleep(std::time::Duration::from_millis(1050));
+    fs::write(proj.join("src/ignored_mod.rs"), "pub fn later() {}\n").unwrap();
+
+    let stop_no_idx = assert_vos_ok(
+        &db,
+        &["session", "stop", "sessproj", "--no-index", "--quality", "4", "--json"],
+    );
+    let val_no_idx: serde_json::Value = serde_json::from_str(&stop_no_idx).expect("stop no-index json");
+    assert_eq!(val_no_idx["files_changed_count"], 0);
+}

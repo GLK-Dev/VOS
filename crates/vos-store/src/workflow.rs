@@ -300,8 +300,11 @@ impl Store {
              FROM events e
              LEFT JOIN objects o ON o.id = e.object_id
              WHERE e.project_id = ?1
-               AND e.created_at >= ?2
-               AND COALESCE(o.is_noise, 0) = 0",
+               AND COALESCE(o.is_noise, 0) = 0
+               AND (
+                 (e.event_type IN ('added', 'modified') AND COALESCE(o.modified_at, e.created_at) >= ?2)
+                 OR (e.event_type NOT IN ('added', 'modified') AND e.created_at >= ?2)
+               )",
         )?;
         let ev_rows = ev_stmt.query_map(params![current.project_id, current.started_at], |row| {
             row.get::<_, String>(0)

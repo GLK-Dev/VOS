@@ -7,9 +7,10 @@ to `docs/recovery_benchmark.md` and `docs/command_usage_audit.md`.
 param(
     [Parameter(Mandatory = $true)]
     [string]$Project,
-    [ValidateSet("continue", "status", "drift", "graph", "coverage", "start", "search", "manual")]
+    [ValidateSet("continue", "status", "drift", "graph", "coverage", "why", "start", "search", "manual")]
     [string]$FirstCommand = "continue",
     [string]$Task = "Resume project context",
+    [string]$Target = "",
     [switch]$WithoutVos
 )
 
@@ -34,11 +35,15 @@ if (-not $WithoutVos) {
 
     Write-Host "`n=== VOS Recovery ($Project | Predicted: $predicted) ===" -ForegroundColor Cyan
     switch ($FirstCommand) {
-        "continue" { vos continue $Project }
+        "continue" { vos continue $Project --experimental }
         "status"   { vos status $Project --experimental }
         "drift"    { vos drift $Project }
         "graph"    { vos graph $Project --experimental }
         "coverage" { vos coverage $Project --experimental }
+        "why"      {
+            $t = if ([string]::IsNullOrWhiteSpace($Target)) { Read-Host "Enter target object (path or filename)" } else { $Target }
+            vos why $t --project $Project --experimental
+        }
         "start"    { vos start $Project }
         "search"   {
             $q = Read-Host "Enter search query"

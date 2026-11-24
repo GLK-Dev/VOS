@@ -279,15 +279,18 @@ impl From<CliGraphDirection> for GraphDirection {
 
 #[derive(Debug, Subcommand)]
 enum SessionCommands {
-    /// Start tracking a recovery/work session for a project.
+    /// Start tracking a recovery/work session for a project (refreshes index by default).
     Start {
         /// Project name.
         project: String,
         /// Optional session kickoff note.
         #[arg(long)]
         note: Option<String>,
+        /// Skip automatic re-indexing of the project root before starting the session.
+        #[arg(long)]
+        no_index: bool,
     },
-    /// Stop the currently open work session and summarize modified areas.
+    /// Stop the currently open work session and summarize modified areas (refreshes index by default).
     Stop {
         /// Optional project name to close a specific project's open session.
         project: Option<String>,
@@ -297,6 +300,9 @@ enum SessionCommands {
         /// Optional closing summary note.
         #[arg(long)]
         note: Option<String>,
+        /// Skip automatic re-indexing before closing the session.
+        #[arg(long)]
+        no_index: bool,
     },
     /// List recorded work sessions.
     List {
@@ -1711,7 +1717,14 @@ fn main() -> Result<()> {
             }
         }
         Commands::Session { action } => match action {
-            SessionCommands::Start { project, note } => {
+            SessionCommands::Start {
+                project,
+                note,
+                no_index,
+            } => {
+                if !no_index {
+                    refresh_project_index_if_present(&mut store, &project)?;
+                }
                 let s = store.start_session(&project, note.as_deref())?;
                 if json {
                     return print_json(&s);
@@ -1734,7 +1747,21 @@ fn main() -> Result<()> {
                 project,
                 quality,
                 note,
+                no_index,
             } => {
+                if !no_index {
+                    let target_project = match project.as_deref() {
+                        Some(name) => Some(name.to_string()),
+                        None => store
+                            .list_sessions(None, 20)?
+                            .into_iter()
+                            .find(|s| s.ended_at.is_none())
+                            .map(|s| s.project_name),
+                    };
+                    if let Some(proj_name) = target_project {
+                        refresh_project_index_if_present(&mut store, &proj_name)?;
+                    }
+                }
                 let s = store.stop_session(project.as_deref(), quality, note.as_deref())?;
                 if json {
                     return print_json(&s);
@@ -2451,4 +2478,21 @@ fn resolve_snapshot_diff(
         })?;
         Ok(store.compare_snapshots(from, to)?)
     }
+}
+
+fn refresh_project_index_if_present(store: &mut Store, project_name: &str) -> Result<()> {
+    if let Some(proj) = store.get_project_by_name(project_name)?
+        && let Some(root) = proj.root_path.as_deref()
+    {
+        let root_path = Path::new(root);
+        if root_path.exists() {
+            index_path_with_options(
+                store,
+                root_path,
+                Some(&proj.name),
+                IndexOptions { no_ignore: false },
+            )?;
+        }
+    }
+    Ok(())
 }
