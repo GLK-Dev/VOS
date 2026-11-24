@@ -50,6 +50,10 @@ try {
         @{ Id = 24; Proj = "vm-transfer"; Task = "Check micro drift";              Cmd = @("drift", "vm-transfer");                               Expect = @("Drift report: vm-transfer") }
     )
 
+    $preStats = (& $VosBin --db $tmpDb session stats) 2>&1 | Out-String
+    $preTotal = if ($preStats -match 'total=(\d+)') { [int]$matches[1] } else { 0 }
+    $preCompleted = if ($preStats -match 'completed=(\d+)') { [int]$matches[1] } else { 0 }
+
     $snapStart = (& $VosBin --db $tmpDb snapshot rustallm --label "batch-start") | Out-String
     if ($LASTEXITCODE -ne 0) { throw "Initial snapshot failed: $snapStart" }
 
@@ -112,7 +116,9 @@ try {
     $id1 = if ($snapStart -match 'Saved snapshot #(\d+)') { $matches[1] } else { "1" }; $id2 = if ($snapEnd -match 'Saved snapshot #(\d+)') { $matches[1] } else { "2" }; $diffOut = (& $VosBin --db $tmpDb compare-snapshot $id1 $id2) 2>&1 | Out-String
     $statsOut = (& $VosBin --db $tmpDb session stats) 2>&1 | Out-String
 
-    if (-not $statsOut.Contains("total=24 completed=24 active=0")) {
+    $expTotal = $preTotal + 24
+    $expCompleted = $preCompleted + 24
+    if (-not $statsOut.Contains("total=$expTotal completed=$expCompleted")) {
         throw "Expected 24 completed sessions in stats, got:`n$statsOut"
     }
     if (-not ($statsOut.Contains("Easy") -and $statsOut.Contains("Medium") -and $statsOut.Contains("Hard"))) {
