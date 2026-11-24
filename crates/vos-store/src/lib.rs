@@ -5,6 +5,7 @@ mod benchmark;
 mod concepts;
 mod decision;
 mod evolution;
+mod experimental;
 mod graph;
 mod insight;
 mod queries;

@@ -12,6 +12,6 @@ pub use models::{
     ObjectDetails, ObjectKind, ObjectRecord, ObjectWhy, Project, ProjectActivity, ProjectContinue,
     ProjectContext, ProjectCoverage, ProjectDrift, ProjectEvolution, ProjectGraph, ProjectHealth,
     ProjectOwnership, ProjectResume, ProjectStart, ProjectStatus, ProjectSummary, QueryIntent,
-    RelatedHit, RelationType, RiskLevel, SearchBenchmarkCase, SearchBenchmarkCaseResult,
+    RecoveryDifficulty, RecoveryPrediction, RelatedHit, RelationType, RiskLevel, SearchBenchmarkCase, SearchBenchmarkCaseResult,
     SearchBenchmarkReport, SearchHit, SearchSignal, SearchVisibility,
 };

@@ -374,3 +374,39 @@ fn cli_promotes_high_risk_hub_with_open_todos_to_critical_risk() {
     assert!(drift_out.contains("[critical risk]"));
     assert!(drift_out.contains("Critical Risk"));
 }
+#[test]
+fn cli_status_experimental_predictor_is_opt_in_and_explainable() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("expproj");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("README.md"), "# ExpProj\nOPEN QUESTION: keep cache?\n").unwrap();
+    fs::write(proj.join("src/lib.rs"), "pub fn init() {}\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "expproj", proj.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "expproj"]);
+
+    // Default `vos status` must stay untouched.
+    let baseline = assert_vos_ok(&db, &["status", "expproj"]);
+    assert!(!baseline.contains("Experimental Insights:"));
+    assert!(!baseline.contains("Recovery Difficulty:"));
+
+    // `--experimental` enables the predictor.
+    let exp_out = assert_vos_ok(&db, &["status", "expproj", "--experimental"]);
+    assert!(exp_out.contains("Experimental Insights:"));
+    assert!(exp_out.contains("Recovery Difficulty:"));
+    assert!(exp_out.contains("Factors:"));
+
+    // `VOS_EXPERIMENTAL=1` also enables it cleanly.
+    let bin = env!("CARGO_BIN_EXE_vos");
+    let env_out = Command::new(bin)
+        .env("VOS_EXPERIMENTAL", "1")
+        .arg("--db")
+        .arg(&db)
+        .args(["status", "expproj"])
+        .output()
+        .expect("execute vos with VOS_EXPERIMENTAL");
+    assert!(env_out.status.success());
+    let stdout = String::from_utf8_lossy(&env_out.stdout);
+    assert!(stdout.contains("Recovery Difficulty:"));
+}

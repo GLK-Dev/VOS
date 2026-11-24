@@ -23,6 +23,10 @@ struct Cli {
     #[arg(long, env = "VOS_DB", global = true)]
     db: Option<PathBuf>,
 
+    /// Enable experimental insight features (or set VOS_EXPERIMENTAL=1).
+    #[arg(long, env = "VOS_EXPERIMENTAL", global = true, value_parser = clap::builder::BoolishValueParser::new())]
+    experimental: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -272,6 +276,7 @@ fn main() -> Result<()> {
     let db_path = cli.db.unwrap_or_else(default_db_path);
     let mut store = Store::open(&db_path)?;
 
+    let experimental = cli.experimental;
     match cli.command {
         Commands::Project { action } => match action {
             ProjectCommands::Create {
@@ -722,6 +727,16 @@ fn main() -> Result<()> {
             } else {
                 for risk in &st.risk_areas {
                     println!("  - {risk}");
+                }
+            }
+
+            if experimental {
+                let pred = store.predict_recovery_difficulty(&st);
+                println!("\nExperimental Insights:");
+                println!("  Recovery Difficulty: {} (score: {})", pred.difficulty, pred.score);
+                println!("  Factors:");
+                for factor in &pred.factors {
+                    println!("    + {factor}");
                 }
             }
         }

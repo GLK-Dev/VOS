@@ -763,3 +763,34 @@ impl fmt::Display for RiskLevel {
         f.write_str(self.as_str())
     }
 }
+/// Experimental predicted effort required to resume work in a project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryDifficulty {
+    Easy,
+    Medium,
+    Hard,
+}
+
+impl RecoveryDifficulty {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Easy => "Easy",
+            Self::Medium => "Medium",
+            Self::Hard => "Hard",
+        }
+    }
+}
+
+impl fmt::Display for RecoveryDifficulty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Explainable deterministic prediction returned under `--experimental`.
+#[derive(Debug, Clone)]
+pub struct RecoveryPrediction {
+    pub difficulty: RecoveryDifficulty,
+    pub score: usize,
+    pub factors: Vec<String>,
+}
