@@ -520,17 +520,94 @@ impl Store {
 }
 
 fn line_has_unfinished_marker(raw_line: &str) -> bool {
-    let lower = raw_line.trim().to_ascii_lowercase();
-    lower.contains("// todo")
-        || lower.contains("// fixme")
-        || lower.contains("# todo")
-        || lower.contains("# fixme")
-        || lower.contains("/* todo")
-        || lower.contains("/* fixme")
-        || lower.starts_with("todo:")
-        || lower.starts_with("fixme:")
-        || lower.starts_with("open question:")
-        || lower.contains("todo!(")
+    let trimmed = raw_line.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    // Check only comment tails or bare macro calls outside quoted string literals.
+    let comment_tail = extract_code_comment_tail(trimmed);
+    if let Some(comment) = comment_tail {
+        let lower = comment.trim_start().to_ascii_lowercase();
+        return (lower.starts_with("todo")
+            && lower[4..].starts_with(|c: char| !c.is_ascii_alphanumeric()))
+            || (lower.starts_with("fixme")
+                && lower[5..].starts_with(|c: char| !c.is_ascii_alphanumeric()))
+            || lower.starts_with("open question:");
+    }
+
+    let code_no_strings = strip_quoted_literals(trimmed).to_ascii_lowercase();
+    code_no_strings.contains("todo!(") || code_no_strings.contains("unimplemented!(")
+}
+
+fn extract_code_comment_tail(line: &str) -> Option<&str> {
+    let bytes = line.as_bytes();
+    let mut in_double = false;
+    let mut in_single = false;
+    let mut escape = false;
+    let mut i = 0;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if escape {
+            escape = false;
+            i += 1;
+            continue;
+        }
+        if (in_double || in_single) && b == b'\\' {
+            escape = true;
+            i += 1;
+            continue;
+        }
+        if !in_single && b == b'"' {
+            in_double = !in_double;
+            i += 1;
+            continue;
+        }
+        if !in_double && b == b'\'' {
+            if i + 2 < bytes.len() && bytes[i + 2] == b'\'' {
+                in_single = !in_single;
+            }
+            i += 1;
+            continue;
+        }
+        if !in_double && !in_single {
+            if b == b'/' && i + 1 < bytes.len() && (bytes[i + 1] == b'/' || bytes[i + 1] == b'*') {
+                return Some(&line[i + 2..]);
+            }
+            if b == b'#' && !line[i..].starts_with("#[") && !line[i..].starts_with("#![") {
+                return Some(&line[i + 1..]);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn strip_quoted_literals(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut in_double = false;
+    let mut escape = false;
+    for ch in line.chars() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if in_double {
+            if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_double = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            in_double = true;
+            continue;
+        }
+        out.push(ch);
+    }
+    out
 }
 #[cfg(test)]
 mod tests {
@@ -740,5 +817,14 @@ mod tests {
 
         let drift = store.project_drift("crit").unwrap();
         assert!(drift.findings.iter().any(|f| f.kind == "critical risk"));
+    }
+
+    #[test]
+    fn unfinished_marker_ignores_string_literals_in_code() {
+        assert!(!line_has_unfinished_marker(r#"if lower.contains("// todo") {"#));
+        assert!(!line_has_unfinished_marker(r#"let s = "fixme: not real";"#));
+        assert!(line_has_unfinished_marker("// TODO: handle zero-length buffer"));
+        assert!(line_has_unfinished_marker("let x = foo(); // FIXME: edge case"));
+        assert!(line_has_unfinished_marker("# TODO: clean temp files"));
     }
 }
