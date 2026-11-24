@@ -178,6 +178,25 @@ impl Store {
         Ok(project)
     }
 
+    /// Removes a project and all associated objects, chunks, tags, relations, events, snapshots, and sessions.
+    pub fn delete_project(&mut self, name: &str) -> Result<usize, StoreError> {
+        let project = self
+            .get_project_by_name(name)?
+            .ok_or_else(|| StoreError::NotFound("project", name.to_string()))?;
+
+        let tx = self.conn.transaction()?;
+        let removed_objects = tx.execute(
+            "DELETE FROM objects WHERE project_id = ?1",
+            params![project.id],
+        )?;
+        tx.execute("DELETE FROM events WHERE project_id = ?1", params![project.id])?;
+        tx.execute("DELETE FROM projects WHERE id = ?1", params![project.id])?;
+        tx.commit()?;
+
+        info!(project = %project.name, removed_objects, "removed project");
+        Ok(removed_objects)
+    }
+
     /// Loads a project by its unique name.
     pub fn get_project_by_name(&self, name: &str) -> Result<Option<Project>, StoreError> {
         self.conn

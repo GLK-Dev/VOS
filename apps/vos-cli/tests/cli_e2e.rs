@@ -642,3 +642,35 @@ fn cli_show_tag_and_untag_disambiguate_with_project_flag() {
     let by_q_arr: Vec<serde_json::Value> = serde_json::from_str(&by_q_tag).expect("search query --tag json");
     assert_eq!(by_q_arr.len(), 1);
 }
+
+#[test]
+fn cli_project_remove_purges_objects_fts_snapshots_and_sessions() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let p1 = tmp.path().join("tempproj");
+    fs::create_dir_all(p1.join("src")).unwrap();
+    fs::write(p1.join("README.md"), "# TempProj unique_marker_xyz\n").unwrap();
+    fs::write(p1.join("src/lib.rs"), "pub fn unique_fn_xyz() {}\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "tempproj", p1.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", p1.to_str().unwrap(), "--project", "tempproj"]);
+    assert_vos_ok(&db, &["snapshot", "tempproj", "--label", "tmp"]);
+    assert_vos_ok(&db, &["session", "start", "tempproj"]);
+    assert_vos_ok(&db, &["session", "stop", "tempproj", "--quality", "4"]);
+
+    let pre_hits = assert_vos_ok(&db, &["search", "unique_marker_xyz", "--json"]);
+    assert_eq!(serde_json::from_str::<Vec<serde_json::Value>>(&pre_hits).unwrap().len(), 1);
+
+    let rm_out = assert_vos_ok(&db, &["project", "remove", "tempproj", "--json"]);
+    let rm_val: serde_json::Value = serde_json::from_str(&rm_out).expect("remove json");
+    assert_eq!(rm_val["project"], "tempproj");
+    assert_eq!(rm_val["removed_objects"], 2);
+
+    // Ensure FTS5, snapshots, and sessions have no orphaned entries.
+    let post_hits = assert_vos_ok(&db, &["search", "unique_marker_xyz", "--json"]);
+    assert!(serde_json::from_str::<Vec<serde_json::Value>>(&post_hits).unwrap().is_empty());
+    let snaps = assert_vos_ok(&db, &["snapshots", "--json"]);
+    assert!(serde_json::from_str::<Vec<serde_json::Value>>(&snaps).unwrap().is_empty());
+    let sess = assert_vos_ok(&db, &["session", "list", "--json"]);
+    assert!(serde_json::from_str::<Vec<serde_json::Value>>(&sess).unwrap().is_empty());
+}

@@ -381,6 +381,11 @@ enum ProjectCommands {
     },
     /// List all projects.
     List,
+    /// Remove a project and all its indexed objects, snapshots, and sessions from the database.
+    Remove {
+        /// Registered project name.
+        name: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -435,6 +440,19 @@ fn main() -> Result<()> {
                         }
                     }
                 }
+            }
+            ProjectCommands::Remove { name } => {
+                let removed_objects = store.delete_project(&name)?;
+                if json {
+                    return print_json(&JsonProjectRemoveReport {
+                        project: name,
+                        removed_objects,
+                    });
+                }
+                println!(
+                    "Removed project '{}' ({} indexed object(s) purged).",
+                    name, removed_objects
+                );
             }
         },
         Commands::Index {
@@ -1368,6 +1386,9 @@ fn main() -> Result<()> {
                         edge.relation_type
                     );
                 }
+                if why.outgoing_relations.len() > 6 {
+                    println!("    ... and {} more", why.outgoing_relations.len() - 6);
+                }
             }
             if !why.incoming_relations.is_empty() {
                 println!("  • Referenced by:");
@@ -1377,6 +1398,9 @@ fn main() -> Result<()> {
                         display_relative(&edge.from_path, root_prefix),
                         edge.relation_type
                     );
+                }
+                if why.incoming_relations.len() > 6 {
+                    println!("    ... and {} more", why.incoming_relations.len() - 6);
                 }
             }
             if !why.related.is_empty() {
@@ -2565,4 +2589,10 @@ fn refresh_project_index_if_present(store: &mut Store, project_name: &str) -> Re
         }
     }
     Ok(())
+}
+
+#[derive(serde::Serialize)]
+struct JsonProjectRemoveReport {
+    project: String,
+    removed_objects: usize,
 }

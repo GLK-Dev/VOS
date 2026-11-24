@@ -12,8 +12,8 @@ See [SPEC.md](SPEC.md) for the canonical v0.1 specification, [AGENTS.md](AGENTS.
 
 ### Validation Summary
 
-- `10` real projects indexed (`780+` active objects, `1200+` deterministic relations)
-- `47 / 47` workspace tests passing (`0` clippy warnings under `-D warnings`)
+- `10` real projects indexed (`780+` active objects, `1690+` deterministic relations)
+- `55 / 55` workspace tests passing (`0` clippy warnings under `-D warnings`)
 - `30 / 30` live sprint recovery scenarios passing (`~110ms` median CLI latency)
 - `24 / 24` isolated multi-project session lifecycle checks passing (`active=0`)
 
@@ -36,6 +36,7 @@ cargo install --path apps/vos-cli
 
 # Register and idempotently index a project
 vos project create my-app ./path/to/project
+vos project remove old-app
 vos index ./path/to/project --project my-app
 vos index --all
 
@@ -71,6 +72,10 @@ vos status --all --experimental --json
 
 # Search, Explainability & Quality Benchmarks
 vos search "scheduler" --explain
+vos search --tag auth --project my-app
+vos tags --project my-app
+vos tag src/lib.rs --project my-app core
+vos untag src/lib.rs --project my-app core
 vos related scheduler
 vos explain "project context"
 vos benchmark search --config tests/search_live.yaml --save
