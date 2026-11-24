@@ -1167,3 +1167,49 @@ fn cli_project_update_preserves_sessions_when_moving_and_renaming() {
         serde_json::from_str(&assert_vos_ok(&db, &["doctor", "--json"])).unwrap();
     assert_eq!(doc_post["healthy"], true);
 }
+
+#[test]
+fn cli_session_stop_log_appends_recovery_row_and_requires_quality() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("logproj");
+    fs::create_dir_all(&proj).unwrap();
+    fs::write(proj.join("README.md"), "# Log project\n").unwrap();
+    let proj_s = proj.to_str().unwrap();
+    assert_vos_ok(&db, &["project", "create", "logproj", proj_s]);
+    assert_vos_ok(&db, &["index", proj_s, "--project", "logproj"]);
+    assert_vos_ok(&db, &["session", "start", "logproj"]);
+
+    let log = tmp.path().join("log.md");
+    fs::write(&log, "| header |").unwrap(); // no trailing newline on purpose
+    let log_s = log.to_str().unwrap();
+
+    let (ok, _, _) = run_vos(&db, &["session", "stop", "logproj", "--log", log_s]);
+    assert!(!ok, "--log without --quality must be rejected");
+
+    assert_vos_ok(
+        &db,
+        &[
+            "session",
+            "stop",
+            "logproj",
+            "--quality",
+            "4",
+            "--note",
+            "a|b",
+            "--log",
+            log_s,
+            "--first-command",
+            "Continue",
+        ],
+    );
+    let content = fs::read_to_string(&log).unwrap();
+    let lines: Vec<&str> = content.lines().collect();
+    assert_eq!(lines.len(), 2, "row must start on its own line: {content}");
+    assert!(
+        lines[1].contains("| logproj | - | continue |"),
+        "{}",
+        lines[1]
+    );
+    assert!(lines[1].ends_with("| 4 | - | - | a/b |"), "{}", lines[1]);
+}
