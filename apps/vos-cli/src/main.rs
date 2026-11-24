@@ -1263,6 +1263,25 @@ fn main() -> Result<()> {
                     }
                 }
             }
+
+            if experimental {
+                let hubs = store.experimental_hub_importance(&project, limit)?;
+                if !hubs.is_empty() {
+                    println!("\nExperimental Hub Importance:");
+                    for (idx, h) in hubs.iter().enumerate() {
+                        println!(
+                            "  {:>2}. {} | Hub Score: {:.2} | {} rels (out: {}, in: {}) | {}",
+                            idx + 1,
+                            h.path,
+                            h.hub_score,
+                            h.total_relations,
+                            h.out_degree,
+                            h.in_degree,
+                            h.role
+                        );
+                    }
+                }
+            }
         }
         Commands::Ownership {
             project,
@@ -1365,6 +1384,28 @@ fn main() -> Result<()> {
                 }
                 if cov.underdocumented.len() > 15 {
                     println!("  ... and {} more", cov.underdocumented.len() - 15);
+                }
+            }
+
+            if experimental {
+                let dq = store.experimental_doc_quality(&project)?;
+                println!("\nExperimental Documentation Quality:");
+                println!(
+                    "  Docs Analyzed: {} | Mean Quality Score: {:.1} / 100",
+                    dq.total_docs, dq.mean_score
+                );
+                println!(
+                    "  Tiers: Rich: {} | Solid: {} | Stub: {}",
+                    dq.rich_count, dq.solid_count, dq.stub_count
+                );
+                if !dq.docs.is_empty() {
+                    println!("  Top Docs:");
+                    for doc in dq.docs.iter().take(5) {
+                        println!(
+                            "    - {} | Score: {}/100 [{}] (md_links: {}, path_refs: {})",
+                            doc.path, doc.quality_score, doc.tier, doc.md_links, doc.path_refs
+                        );
+                    }
                 }
             }
         }

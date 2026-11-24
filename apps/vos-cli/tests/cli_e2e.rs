@@ -409,6 +409,17 @@ fn cli_status_experimental_predictor_is_opt_in_and_explainable() {
     assert!(env_out.status.success());
     let stdout = String::from_utf8_lossy(&env_out.stdout);
     assert!(stdout.contains("Recovery Difficulty:"));
+
+    fs::write(proj.join("README.md"), "# ExpProj\nSee [lib](src/lib.rs).\n").unwrap();
+    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "expproj"]);
+
+    let graph_exp = assert_vos_ok(&db, &["graph", "expproj", "--experimental"]);
+    assert!(graph_exp.contains("Experimental Hub Importance:"));
+    assert!(graph_exp.contains("Hub Score:"));
+
+    let cov_exp = assert_vos_ok(&db, &["coverage", "expproj", "--experimental"]);
+    assert!(cov_exp.contains("Experimental Documentation Quality:"));
+    assert!(cov_exp.contains("Mean Quality Score:"));
 }
 
 #[test]

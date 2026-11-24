@@ -436,7 +436,7 @@ fn score_search_candidate(
     if intent == QueryIntent::Concept && is_concept_document(&cand.hit.path, &cand.hit.title) {
         signals.push(SearchSignal {
             label: "concept document boost".to_string(),
-            delta: CONCEPT_DOC_BASE_BOOST * 2.0,
+            delta: CONCEPT_DOC_BASE_BOOST * 2.5,
         });
     }
 

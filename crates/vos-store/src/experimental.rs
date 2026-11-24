@@ -1,13 +1,232 @@
 use vos_core::util::now_unix;
-use vos_core::{DocumentationHealth, ProjectStatus, RecoveryDifficulty, RecoveryPrediction};
+use std::collections::HashMap;
+use rusqlite::params;
+use vos_core::{
+    DocQualityEntry, DocQualityReport, DocQualityTier, DocumentationHealth, GraphDirection,
+    HubImportance, ProjectStatus, RecoveryDifficulty, RecoveryPrediction, RelationType,
+};
 
-use crate::Store;
+use crate::{Store, StoreError};
 
 impl Store {
     /// Predicts project re-entry difficulty (`Easy`, `Medium`, `Hard`) from existing status signals.
     pub fn predict_recovery_difficulty(&self, status: &ProjectStatus) -> RecoveryPrediction {
         predict_from_status_at(status, now_unix())
     }
+
+    /// Computes normalized centrality (`hub_score` 0.0..=1.0) and structural role per connected node.
+    pub fn experimental_hub_importance(
+        &self,
+        project_name: &str,
+        limit: usize,
+    ) -> Result<Vec<HubImportance>, StoreError> {
+        let graph = self.project_graph(project_name, None, GraphDirection::Both, 1, 500)?;
+        let root_prefix = graph.project.root_path.as_deref().unwrap_or("");
+        let trimmed_root = root_prefix.trim_end_matches(['/', '\\']);
+
+        let mut scored: Vec<(f64, HubImportance)> = Vec::new();
+        let mut max_raw = 0.0_f64;
+
+        for hub in &graph.hubs {
+            let in_deg = hub.incoming_count;
+            let out_deg = hub.outgoing_count;
+            let total = in_deg + out_deg;
+            if total == 0 {
+                continue;
+            }
+            let raw = 0.6 * (in_deg as f64) + 0.4 * (out_deg as f64);
+            if raw > max_raw {
+                max_raw = raw;
+            }
+            let role = if in_deg >= out_deg.saturating_mul(2) && in_deg >= 2 {
+                "Core Provider"
+            } else if out_deg >= in_deg.saturating_mul(2) && out_deg >= 2 {
+                "Orchestrator"
+            } else {
+                "Balanced Hub"
+            };
+            let rel_path = if !trimmed_root.is_empty() {
+                hub.object
+                    .path
+                    .strip_prefix(trimmed_root)
+                    .map(|r| r.trim_start_matches(['/', '\\']).to_string())
+                    .unwrap_or_else(|| hub.object.path.clone())
+            } else {
+                hub.object.path.clone()
+            };
+
+            scored.push((
+                raw,
+                HubImportance {
+                    path: rel_path,
+                    title: hub.object.title.clone(),
+                    out_degree: out_deg,
+                    in_degree: in_deg,
+                    total_relations: total,
+                    hub_score: 0.0,
+                    role: role.to_string(),
+                },
+            ));
+        }
+
+        if max_raw > 0.0 {
+            for (raw, item) in &mut scored {
+                item.hub_score = (*raw / max_raw).clamp(0.0, 1.0);
+            }
+        }
+
+        scored.sort_by(|a, b| {
+            b.1.hub_score
+                .total_cmp(&a.1.hub_score)
+                .then_with(|| b.1.total_relations.cmp(&a.1.total_relations))
+                .then_with(|| a.1.path.cmp(&b.1.path))
+        });
+
+        let capped = limit.clamp(1, 50);
+        Ok(scored.into_iter().take(capped).map(|(_, h)| h).collect())
+    }
+
+    /// Evaluates deterministic documentation quality (`0..=100`) without LLMs using size, links, and path refs.
+    pub fn experimental_doc_quality(
+        &self,
+        project_name: &str,
+    ) -> Result<DocQualityReport, StoreError> {
+        let project = self
+            .get_project_by_name(project_name)?
+            .ok_or_else(|| StoreError::NotFound("project", project_name.to_string()))?;
+        let root_prefix = project.root_path.as_deref().unwrap_or("");
+        let trimmed_root = root_prefix.trim_end_matches(['/', '\\']);
+
+        let mut doc_stmt = self.conn.prepare(
+            "SELECT id, path, title, size_bytes
+             FROM objects
+             WHERE project_id = ?1
+               AND is_deleted = 0
+               AND is_noise = 0
+               AND kind IN ('note', 'doc')",
+        )?;
+        let doc_rows = doc_stmt
+            .query_map(params![project.id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?.max(0) as usize,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut link_stmt = self.conn.prepare(
+            "SELECT r.from_id, r.relation_type
+             FROM relations r
+             JOIN objects o_from ON o_from.id = r.from_id
+             JOIN objects o_to ON o_to.id = r.to_id
+             WHERE o_from.project_id = ?1
+               AND o_to.project_id = ?1
+               AND o_from.is_deleted = 0
+               AND o_to.is_deleted = 0
+               AND o_from.kind IN ('note', 'doc')
+               AND r.relation_type IN ('md_link', 'path_ref')",
+        )?;
+        let link_rows = link_stmt
+            .query_map(params![project.id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut ref_counts: HashMap<String, (usize, usize)> = HashMap::new();
+        for (from_id, rel_str) in link_rows {
+            let entry = ref_counts.entry(from_id).or_insert((0, 0));
+            match RelationType::from_db(&rel_str) {
+                RelationType::MdLink => entry.0 += 1,
+                RelationType::PathRef => entry.1 += 1,
+                _ => {}
+            }
+        }
+
+        let mut docs = Vec::with_capacity(doc_rows.len());
+        let mut score_sum = 0_usize;
+        let mut rich_count = 0_usize;
+        let mut solid_count = 0_usize;
+        let mut stub_count = 0_usize;
+
+        for (id, path, title, size_bytes) in doc_rows {
+            let (md_links, path_refs) = ref_counts.get(&id).copied().unwrap_or((0, 0));
+            let substance_pts = (size_bytes / 150).min(40);
+            let md_pts = (md_links * 10).min(30);
+            let ref_pts = (path_refs * 5).min(20);
+            let anchor_pts = if is_canonical_doc_title(&title) { 10 } else { 0 };
+            let quality_score = (substance_pts + md_pts + ref_pts + anchor_pts).min(100);
+
+            let tier = if quality_score >= 70 {
+                rich_count += 1;
+                DocQualityTier::Rich
+            } else if quality_score >= 35 {
+                solid_count += 1;
+                DocQualityTier::Solid
+            } else {
+                stub_count += 1;
+                DocQualityTier::Stub
+            };
+            score_sum += quality_score;
+
+            let rel_path = if !trimmed_root.is_empty() {
+                path.strip_prefix(trimmed_root)
+                    .map(|r| r.trim_start_matches(['/', '\\']).to_string())
+                    .unwrap_or(path)
+            } else {
+                path
+            };
+
+            docs.push(DocQualityEntry {
+                path: rel_path,
+                title,
+                quality_score,
+                tier,
+                md_links,
+                path_refs,
+                size_bytes,
+            });
+        }
+
+        docs.sort_by(|a, b| {
+            b.quality_score
+                .cmp(&a.quality_score)
+                .then_with(|| b.md_links.cmp(&a.md_links))
+                .then_with(|| a.path.cmp(&b.path))
+        });
+
+        let total_docs = docs.len();
+        let mean_score = if total_docs == 0 {
+            0.0
+        } else {
+            score_sum as f64 / total_docs as f64
+        };
+
+        Ok(DocQualityReport {
+            project_name: project.name,
+            total_docs,
+            mean_score,
+            rich_count,
+            solid_count,
+            stub_count,
+            docs,
+        })
+    }
+}
+
+fn is_canonical_doc_title(title: &str) -> bool {
+    let lower = title.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "readme.md"
+            | "spec.md"
+            | "architecture.md"
+            | "roadmap.md"
+            | "contributing.md"
+            | "whitepaper.md"
+            | "design_manifesto.md"
+    )
 }
 
 pub(crate) fn predict_from_status_at(status: &ProjectStatus, now: i64) -> RecoveryPrediction {
@@ -160,5 +379,120 @@ mod tests {
         let micro = predict_from_status_at(&micro_st, now);
         assert_eq!(micro.difficulty, RecoveryDifficulty::Easy);
         assert_eq!(micro.score, 2 + 1);
+    }
+
+    #[test]
+    fn experimental_hub_importance_and_doc_quality_score_deterministically() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("lab", None, None).unwrap();
+        let mut batch = store.begin_index_batch().unwrap();
+
+        let id_spec = batch
+            .upsert_object(crate::UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "SPEC.md".to_string(),
+                kind: vos_core::ObjectKind::Note,
+                title: "SPEC.md".to_string(),
+                summary: Some("Spec".to_string()),
+                content_hash: "hs".to_string(),
+                size_bytes: 6000,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec!["Spec content".to_string()],
+            })
+            .unwrap()
+            .object_id()
+            .to_string();
+        let id_stub = batch
+            .upsert_object(crate::UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "notes/stub.md".to_string(),
+                kind: vos_core::ObjectKind::Note,
+                title: "stub.md".to_string(),
+                summary: Some("Stub".to_string()),
+                content_hash: "hst".to_string(),
+                size_bytes: 50,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec!["Stub".to_string()],
+            })
+            .unwrap()
+            .object_id()
+            .to_string();
+        let id_core = batch
+            .upsert_object(crate::UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "src/core.rs".to_string(),
+                kind: vos_core::ObjectKind::Code,
+                title: "core.rs".to_string(),
+                summary: Some("Core".to_string()),
+                content_hash: "hc".to_string(),
+                size_bytes: 200,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec!["pub fn core() {}".to_string()],
+            })
+            .unwrap()
+            .object_id()
+            .to_string();
+        let id_api = batch
+            .upsert_object(crate::UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "src/api.rs".to_string(),
+                kind: vos_core::ObjectKind::Code,
+                title: "api.rs".to_string(),
+                summary: Some("Api".to_string()),
+                content_hash: "ha".to_string(),
+                size_bytes: 200,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec!["use crate::core;".to_string()],
+            })
+            .unwrap()
+            .object_id()
+            .to_string();
+
+        batch
+            .sync_relations(
+                &[id_spec.clone(), id_api.clone()],
+                &[
+                    crate::RelationInput {
+                        from_object_id: id_spec.clone(),
+                        to_object_id: id_core.clone(),
+                        relation_type: RelationType::MdLink,
+                        confidence: 0.95,
+                        detail: None,
+                    },
+                    crate::RelationInput {
+                        from_object_id: id_spec.clone(),
+                        to_object_id: id_api.clone(),
+                        relation_type: RelationType::PathRef,
+                        confidence: 0.75,
+                        detail: None,
+                    },
+                    crate::RelationInput {
+                        from_object_id: id_api.clone(),
+                        to_object_id: id_core.clone(),
+                        relation_type: RelationType::RustUse,
+                        confidence: 0.90,
+                        detail: None,
+                    },
+                ],
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let hubs = store.experimental_hub_importance("lab", 5).unwrap();
+        assert_eq!(hubs[0].path, "src/core.rs");
+        assert!((hubs[0].hub_score - 1.0).abs() < 1e-6);
+        assert_eq!(hubs[0].role, "Core Provider");
+
+        let dq = store.experimental_doc_quality("lab").unwrap();
+        assert_eq!(dq.total_docs, 2);
+        assert_eq!(dq.docs[0].title, "SPEC.md");
+        assert!(dq.docs[0].quality_score >= 65);
+        assert_eq!(dq.docs[1].title, "stub.md");
+        assert_eq!(dq.docs[1].tier, DocQualityTier::Stub);
+        let _ = id_stub;
     }
 }

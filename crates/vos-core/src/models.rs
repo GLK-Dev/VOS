@@ -903,3 +903,63 @@ pub struct SessionStats {
     pub most_productive_areas: Vec<(String, usize)>,
     pub by_predicted_difficulty: Vec<DifficultyStats>,
 }
+
+/// Experimental structural centrality metrics for a node in the dependency graph.
+#[derive(Debug, Clone)]
+pub struct HubImportance {
+    pub path: String,
+    pub title: String,
+    pub out_degree: usize,
+    pub in_degree: usize,
+    pub total_relations: usize,
+    pub hub_score: f64,
+    pub role: String,
+}
+
+/// Experimental documentation substance tier (`Rich`, `Solid`, `Stub`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocQualityTier {
+    Rich,
+    Solid,
+    Stub,
+}
+
+impl DocQualityTier {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Rich => "Rich",
+            Self::Solid => "Solid",
+            Self::Stub => "Stub",
+        }
+    }
+}
+
+impl fmt::Display for DocQualityTier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Experimental per-document deterministic quality score (`0..=100`).
+#[derive(Debug, Clone)]
+pub struct DocQualityEntry {
+    pub path: String,
+    pub title: String,
+    pub quality_score: usize,
+    pub tier: DocQualityTier,
+    pub md_links: usize,
+    pub path_refs: usize,
+    pub size_bytes: usize,
+}
+
+/// Experimental project documentation quality report (`vos coverage --experimental`).
+#[derive(Debug, Clone)]
+pub struct DocQualityReport {
+    pub project_name: String,
+    pub total_docs: usize,
+    pub mean_score: f64,
+    pub rich_count: usize,
+    pub solid_count: usize,
+    pub stub_count: usize,
+    pub docs: Vec<DocQualityEntry>,
+}
