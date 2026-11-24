@@ -56,9 +56,9 @@ enum Commands {
         #[arg(long)]
         no_ignore: bool,
     },
-    /// Full-text search across indexed objects and chunks (optionally filtered by --tag or --kind).
+    /// Full-text search across indexed objects and chunks (optionally filtered by --tag, --kind, or --since).
     Search {
-        /// Search query string (optional when --tag or --kind is specified).
+        /// Search query string (optional when --tag, --kind, or --since is specified).
         query: Option<String>,
         /// Restrict results to a specific project.
         #[arg(long)]
@@ -69,6 +69,9 @@ enum Commands {
         /// Filter results by object kind (`code`, `note`, `doc`, `config`, `model`, `media`, `other`).
         #[arg(long)]
         kind: Option<CliObjectKind>,
+        /// Only return objects modified since `YYYY-MM-DD`, `Nh`, `Nd`, `Nw`, `today`, or `yesterday`.
+        #[arg(long)]
+        since: Option<String>,
         /// Maximum number of results to display.
         #[arg(long, default_value_t = 10)]
         limit: usize,
@@ -544,68 +547,22 @@ fn main() -> Result<()> {
             project,
             tag,
             kind,
+            since,
             limit,
             explain,
             include_internal,
-        } => {
-            let mapped_kind = kind.map(Into::into);
-            let hits = store.search_with_filters(
-                query.as_deref(),
-                SearchFilters {
-                    project: project.as_deref(),
-                    tag: tag.as_deref(),
-                    kind: mapped_kind,
-                    limit,
-                    include_internal,
-                },
-            )?;
-            if json {
-                return print_json(&hits);
-            }
-            if hits.is_empty() {
-                let target = query
-                    .as_deref()
-                    .map(|q| format!("\"{q}\""))
-                    .or_else(|| tag.as_deref().map(|t| format!("tag '{t}'")))
-                    .or_else(|| mapped_kind.map(|k| format!("kind '{k}'")))
-                    .unwrap_or_else(|| "(empty)".to_string());
-                println!("No matches found for {target}.");
-            } else {
-                for (idx, hit) in hits.iter().enumerate() {
-                    let proj = hit.project_name.as_deref().unwrap_or("-");
-                    if explain {
-                        println!(
-                            "{}. {} [{} | project: {} | intent: {} | score: {:.2}]",
-                            idx + 1,
-                            hit.title,
-                            hit.kind,
-                            proj,
-                            hit.intent,
-                            hit.score
-                        );
-                    } else {
-                        println!(
-                            "{}. {} [{} | project: {}]",
-                            idx + 1,
-                            hit.title,
-                            hit.kind,
-                            proj
-                        );
-                    }
-                    println!("   {}", hit.path);
-                    let compact_snippet = hit.snippet.replace('\n', " ");
-                    if !compact_snippet.trim().is_empty() {
-                        println!("   {compact_snippet}");
-                    }
-                    if explain && !hit.signals.is_empty() {
-                        println!("   signals:");
-                        for sig in &hit.signals {
-                            println!("     {:+.2} {}", sig.delta, sig.label);
-                        }
-                    }
-                }
-            }
-        }
+        } => handle_search(
+            &store,
+            query,
+            project,
+            tag,
+            kind,
+            since,
+            limit,
+            explain,
+            include_internal,
+            json,
+        )?,
         Commands::Show { target, project } => {
             let details = store.show_object_scoped(&target, project.as_deref())?;
             if json {
@@ -1850,6 +1807,83 @@ fn main() -> Result<()> {
         Commands::Benchmark { action } => handle_benchmark(&store, action, json)?,
     }
 
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn handle_search(
+    store: &Store,
+    query: Option<String>,
+    project: Option<String>,
+    tag: Option<String>,
+    kind: Option<CliObjectKind>,
+    since: Option<String>,
+    limit: usize,
+    explain: bool,
+    include_internal: bool,
+    json: bool,
+) -> Result<()> {
+    let mapped_kind = kind.map(Into::into);
+    let since_ts = since.as_deref().map(parse_since_arg).transpose()?;
+    let hits = store.search_with_filters(
+        query.as_deref(),
+        SearchFilters {
+            project: project.as_deref(),
+            tag: tag.as_deref(),
+            kind: mapped_kind,
+            since: since_ts,
+            limit,
+            include_internal,
+        },
+    )?;
+    if json {
+        return print_json(&hits);
+    }
+    if hits.is_empty() {
+        let target = query
+            .as_deref()
+            .map(|q| format!("\"{q}\""))
+            .or_else(|| tag.as_deref().map(|t| format!("tag '{t}'")))
+            .or_else(|| mapped_kind.map(|k| format!("kind '{k}'")))
+            .or_else(|| since.as_deref().map(|s| format!("since '{s}'")))
+            .unwrap_or_else(|| "(empty)".to_string());
+        println!("No matches found for {target}.");
+        return Ok(());
+    }
+    for (idx, hit) in hits.iter().enumerate() {
+        let proj = hit.project_name.as_deref().unwrap_or("-");
+        if explain {
+            println!(
+                "{}. {} [{} | project: {} | intent: {} | score: {:.2}]",
+                idx + 1,
+                hit.title,
+                hit.kind,
+                proj,
+                hit.intent,
+                hit.score
+            );
+        } else {
+            println!(
+                "{}. {} [{} | project: {}]",
+                idx + 1,
+                hit.title,
+                hit.kind,
+                proj
+            );
+        }
+        println!("   {}", hit.path);
+        let compact_snippet = hit.snippet.replace('\n', " ");
+        if !compact_snippet.trim().is_empty() {
+            println!("   {compact_snippet}");
+        }
+        if explain && !hit.signals.is_empty() {
+            println!("   signals:");
+            for sig in &hit.signals {
+                println!("     {:+.2} {}", sig.delta, sig.label);
+            }
+        }
+    }
     Ok(())
 }
 

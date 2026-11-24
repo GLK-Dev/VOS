@@ -49,6 +49,7 @@ pub struct SearchFilters<'a> {
     pub project: Option<&'a str>,
     pub tag: Option<&'a str>,
     pub kind: Option<ObjectKind>,
+    pub since: Option<i64>,
     pub limit: usize,
     pub include_internal: bool,
 }
@@ -59,6 +60,7 @@ impl Default for SearchFilters<'_> {
             project: None,
             tag: None,
             kind: None,
+            since: None,
             limit: 10,
             include_internal: false,
         }
@@ -151,6 +153,7 @@ impl Store {
                 project: project_name,
                 tag,
                 kind: None,
+                since: None,
                 limit,
                 include_internal,
             },
@@ -170,19 +173,21 @@ impl Store {
             .tag
             .map(|t| t.trim().to_lowercase())
             .filter(|t| !t.is_empty());
+        let since_ts = filters.since;
         let clean_query = query.map(str::trim).filter(|q| !q.is_empty());
         let requested_limit = filters.limit.clamp(1, 200);
 
         let Some(query) = clean_query else {
-            if clean_tag.is_none() && kind_str.is_none() {
+            if clean_tag.is_none() && kind_str.is_none() && since_ts.is_none() {
                 return Err(StoreError::InvalidInput(
-                    "provide a search query, --tag, or --kind".to_string(),
+                    "provide a search query, --tag, --kind, or --since".to_string(),
                 ));
             }
             return self.search_without_query(
                 clean_tag.as_deref(),
                 project_name,
                 kind_str,
+                since_ts,
                 requested_limit,
             );
         };
@@ -207,6 +212,7 @@ impl Store {
             project_name,
             clean_tag.as_deref(),
             kind_str,
+            since_ts,
             pool_limit,
             StageKind::Stage1And,
             intent,
@@ -224,6 +230,7 @@ impl Store {
                 project_name,
                 clean_tag.as_deref(),
                 kind_str,
+                since_ts,
                 pool_limit,
                 StageKind::Stage2Or,
                 intent,
@@ -241,6 +248,7 @@ impl Store {
                 project_name,
                 clean_tag.as_deref(),
                 kind_str,
+                since_ts,
                 pool_limit,
                 StageKind::ConceptExpansion,
                 intent,
@@ -255,6 +263,7 @@ impl Store {
             project_name,
             clean_tag.as_deref(),
             kind_str,
+            since_ts,
             pool_limit,
             intent,
             &mut merged,
@@ -308,6 +317,7 @@ impl Store {
         tag_name: Option<&str>,
         project_name: Option<&str>,
         kind_filter: Option<&str>,
+        since: Option<i64>,
         limit: usize,
     ) -> Result<Vec<SearchHit>, StoreError> {
         let mut stmt = self.conn.prepare(
@@ -320,10 +330,13 @@ impl Store {
                ))
                AND (?2 IS NULL OR p.name = ?2)
                AND (?3 IS NULL OR o.kind = ?3)
+               AND (?5 IS NULL OR o.modified_at >= ?5)
              ORDER BY o.is_noise ASC, o.modified_at DESC, o.title ASC
              LIMIT ?4",
         )?;
-        let rows = stmt.query_map(params![tag_name, project_name, kind_filter, limit as i64], |row| {
+        let rows = stmt.query_map(
+            params![tag_name, project_name, kind_filter, limit as i64, since],
+            |row| {
             let kind_str: String = row.get(4)?;
             let is_noise: i64 = row.get(5)?;
             let kind = ObjectKind::from_db(&kind_str);
@@ -332,11 +345,20 @@ impl Store {
             } else {
                 QueryIntent::Code
             };
-            let filter_label = match (tag_name, kind_filter) {
-                (Some(t), Some(k)) => format!("tag={t}, kind={k}"),
-                (Some(t), None) => format!("tag={t}"),
-                (None, Some(k)) => format!("kind={k}"),
-                (None, None) => "filter match".to_string(),
+            let mut label_parts = Vec::new();
+            if let Some(t) = tag_name {
+                label_parts.push(format!("tag={t}"));
+            }
+            if let Some(k) = kind_filter {
+                label_parts.push(format!("kind={k}"));
+            }
+            if since.is_some() {
+                label_parts.push("since".to_string());
+            }
+            let filter_label = if label_parts.is_empty() {
+                "filter match".to_string()
+            } else {
+                label_parts.join(", ")
             };
             Ok(SearchHit {
                 object_id: row.get(0)?,
@@ -364,6 +386,7 @@ impl Store {
         project_name: Option<&str>,
         tag_filter: Option<&str>,
         kind_filter: Option<&str>,
+        since_ts: Option<i64>,
         pool_limit: i64,
         stage: StageKind,
         intent: QueryIntent,
@@ -389,12 +412,13 @@ impl Store {
                        SELECT 1 FROM tags t WHERE t.object_id = o.id AND t.tag = ?4
                    ))
                    AND (?5 IS NULL OR o.kind = ?5)
+                   AND (?6 IS NULL OR o.modified_at >= ?6)
                  ORDER BY rank
                  LIMIT ?3",
             )?;
 
             let rows = stmt.query_map(
-                params![fts_query, project_name, pool_limit, tag_filter, kind_filter],
+                params![fts_query, project_name, pool_limit, tag_filter, kind_filter, since_ts],
                 |row| {
                 let kind_str: String = row.get(4)?;
                 let is_noise: i64 = row.get(5)?;
@@ -468,12 +492,13 @@ impl Store {
                        SELECT 1 FROM tags t WHERE t.object_id = o.id AND t.tag = ?4
                    ))
                    AND (?5 IS NULL OR o.kind = ?5)
+                   AND (?6 IS NULL OR o.modified_at >= ?6)
                  ORDER BY rank
                  LIMIT ?3",
             )?;
 
             let rows = stmt.query_map(
-                params![fts_query, project_name, pool_limit, tag_filter, kind_filter],
+                params![fts_query, project_name, pool_limit, tag_filter, kind_filter, since_ts],
                 |row| {
                 let kind_str: String = row.get(4)?;
                 let is_noise: i64 = row.get(5)?;
@@ -539,6 +564,7 @@ impl Store {
         project_name: Option<&str>,
         tag_filter: Option<&str>,
         kind_filter: Option<&str>,
+        since_ts: Option<i64>,
         pool_limit: i64,
         intent: QueryIntent,
         merged: &mut HashMap<String, SearchCandidate>,
@@ -571,13 +597,14 @@ impl Store {
                    SELECT 1 FROM tags tf WHERE tf.object_id = o.id AND tf.tag = ?3
                ))
                AND (?4 IS NULL OR o.kind = ?4)
+               AND (?6 IS NULL OR o.modified_at >= ?6)
              ORDER BY o.is_noise ASC, o.modified_at DESC
              LIMIT ?5",
         )?;
 
         for tag in lookup_tags {
             let rows = stmt.query_map(
-                params![tag, project_name, tag_filter, kind_filter, pool_limit],
+                params![tag, project_name, tag_filter, kind_filter, pool_limit, since_ts],
                 |row| {
                     let kind_str: String = row.get(4)?;
                     let is_noise: i64 = row.get(5)?;
@@ -1062,5 +1089,68 @@ mod tests {
         let hits = store.search("billing", Some("tagboost"), 5).unwrap();
         let worker_hit = hits.iter().find(|h| h.title == "worker.rs").expect("tagged object found");
         assert!(worker_hit.signals.iter().any(|s| s.label == "tag match (billing)"));
+    }
+
+    #[test]
+    fn search_since_filter_restricts_fts_tag_and_metadata_queries() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("sincerepo", None, None).unwrap();
+
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(crate::UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/old_sched.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "old_sched.rs".to_string(),
+                summary: Some("Legacy scheduler".to_string()),
+                content_hash: "h_old".to_string(),
+                size_bytes: 60,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec!["pub fn schedule_old() {}".to_string()],
+            })
+            .unwrap();
+        batch
+            .upsert_object(crate::UpsertObjectInput {
+                project_id: Some(proj.id),
+                path: "/repo/new_sched.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "new_sched.rs".to_string(),
+                summary: Some("Current scheduler".to_string()),
+                content_hash: "h_new".to_string(),
+                size_bytes: 60,
+                modified_at: 1_000,
+                is_noise: false,
+                chunks: vec!["pub fn schedule_new() {}".to_string()],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        let fts_recent = store
+            .search_with_filters(
+                Some("scheduler"),
+                SearchFilters {
+                    project: Some("sincerepo"),
+                    since: Some(500),
+                    ..SearchFilters::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(fts_recent.len(), 1);
+        assert_eq!(fts_recent[0].title, "new_sched.rs");
+
+        let meta_recent = store
+            .search_with_filters(
+                None,
+                SearchFilters {
+                    project: Some("sincerepo"),
+                    since: Some(500),
+                    ..SearchFilters::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(meta_recent.len(), 1);
+        assert_eq!(meta_recent[0].title, "new_sched.rs");
     }
 }

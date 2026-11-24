@@ -796,3 +796,32 @@ fn cli_drift_all_audits_portfolio_and_rejects_conflicting_args() {
     assert!(!run_vos(&db, &["drift"]).0);
     assert!(!run_vos(&db, &["drift", "--all", "clean"]).0);
 }
+
+#[test]
+fn cli_search_since_filters_recent_and_supports_filter_only_mode() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("recentsearch");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("src").join("cache.rs"), "pub fn warm_cache() {}\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "recentsearch", proj.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", "--all"]);
+
+    let fts_hits = assert_vos_ok(
+        &db,
+        &["search", "cache", "--since", "12h", "--project", "recentsearch", "--json"],
+    );
+    let fts_arr: Vec<serde_json::Value> = serde_json::from_str(&fts_hits).expect("fts since json");
+    assert_eq!(fts_arr.len(), 1);
+    assert_eq!(fts_arr[0]["title"], "cache.rs");
+
+    let meta_hits = assert_vos_ok(
+        &db,
+        &["search", "--since", "today", "--project", "recentsearch", "--json"],
+    );
+    let meta_arr: Vec<serde_json::Value> = serde_json::from_str(&meta_hits).expect("meta since json");
+    assert_eq!(meta_arr.len(), 1);
+
+    assert!(!run_vos(&db, &["search", "--since", "invalid-date"]).0);
+}

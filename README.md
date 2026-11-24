@@ -13,7 +13,7 @@ See [SPEC.md](SPEC.md) for the canonical v0.1 specification, [AGENTS.md](AGENTS.
 ### Validation Summary
 
 - `10` real projects indexed (`780+` active objects, `1690+` deterministic relations)
-- `68 / 68` workspace tests passing (`0` clippy warnings under `-D warnings`)
+- `70 / 70` workspace tests passing (`0` clippy warnings under `-D warnings`)
 - `30 / 30` live sprint recovery scenarios passing (`~110ms` median CLI latency)
 - `24 / 24` isolated multi-project session lifecycle checks passing (`active=0`)
 
@@ -75,6 +75,7 @@ vos status --all --experimental --json
 # Search, Explainability & Quality Benchmarks
 vos search "scheduler" --explain
 vos search --tag auth --kind code --project my-app
+vos search --since 7d --kind code --project my-app
 vos tags --project my-app
 vos tag src/lib.rs --project my-app core
 vos untag src/lib.rs --project my-app core
