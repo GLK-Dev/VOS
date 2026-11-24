@@ -410,3 +410,41 @@ fn cli_status_experimental_predictor_is_opt_in_and_explainable() {
     let stdout = String::from_utf8_lossy(&env_out.stdout);
     assert!(stdout.contains("Recovery Difficulty:"));
 }
+
+#[test]
+fn cli_snapshot_compare_and_session_tracking_work_end_to_end() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("mem");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("README.md"), "# Mem\n- [ ] Task one\n").unwrap();
+    fs::write(proj.join("src/lib.rs"), "pub fn base() {}\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "mem", proj.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "mem"]);
+
+    let snap1 = assert_vos_ok(&db, &["snapshot", "mem", "--label", "start"]);
+    assert!(snap1.contains("Saved snapshot #1 [start]"));
+
+    let sess_start = assert_vos_ok(&db, &["session", "start", "mem", "--note", "resume work"]);
+    assert!(sess_start.contains("Predicted Difficulty:"));
+
+    fs::write(proj.join("src/engine.rs"), "pub fn engine() {}\n").unwrap();
+    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "mem"]);
+
+    let sess_stop = assert_vos_ok(
+        &db,
+        &["session", "stop", "mem", "--quality", "5", "--note", "done"],
+    );
+    assert!(sess_stop.contains("Actual Quality: 5/5"));
+
+    let snap2 = assert_vos_ok(&db, &["snapshot", "mem", "--label", "after"]);
+    assert!(snap2.contains("Saved snapshot #2 [after]"));
+
+    let diff_out = assert_vos_ok(&db, &["compare-snapshot", "1", "2"]);
+    assert!(diff_out.contains("Active Files:   3 (+1)"));
+
+    let stats_out = assert_vos_ok(&db, &["session", "stats", "mem"]);
+    assert!(stats_out.contains("total=1 completed=1 active=0"));
+    assert!(stats_out.contains("Mean Recovery Quality: 5.00 / 5.0"));
+}

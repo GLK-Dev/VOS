@@ -11,6 +11,7 @@ mod insight;
 mod queries;
 mod recovery;
 mod search;
+mod workflow;
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -31,6 +32,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("0002_noise", include_str!("../../../migrations/0002_noise.sql")),
     ("0003_benchmark_history", include_str!("../../../migrations/0003_benchmark_history.sql")),
     ("0004_relations", include_str!("../../../migrations/0004_relations.sql")),
+    ("0005_snapshots_and_sessions", include_str!("../../../migrations/0005_snapshots_and_sessions.sql")),
 ];
 
 /// Errors returned by the SQLite store layer.

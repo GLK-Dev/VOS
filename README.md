@@ -6,7 +6,7 @@ See [SPEC.md](SPEC.md) for the canonical specification and [AGENTS.md](AGENTS.md
 
 ## Project Status
 
-**Version:** VOS v1.1.2 (Insight Composition Refinement)
+**Version:** VOS v1.2.0 (Insight + Snapshots & Session Tracking)
 
 **Status:** Validated & Frozen (`Critical Risk` + `status` dashboard + `drift` structural risk; `snapshot` and `session` deferred pending Recovery Benchmark data)
 
@@ -66,6 +66,11 @@ vos graph my-app
 vos graph my-app --target src/lib.rs --direction both
 vos ownership my-app --days 14
 vos coverage my-app
+vos snapshot my-app --label before-break
+vos compare-snapshot 1 2
+vos session start my-app
+vos session stop my-app --quality 5
+vos session stats my-app
 vos explain "project context"
 vos benchmark search --config tests/search_live.yaml --save
 vos benchmark history

@@ -209,6 +209,34 @@ enum Commands {
         #[arg(long, default_value_t = 8)]
         limit: usize,
     },
+    /// Capture a point-in-time snapshot of project status, coverage, and risks.
+    Snapshot {
+        /// Project name.
+        project: String,
+        /// Optional human-readable snapshot label.
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// List saved project snapshots.
+    Snapshots {
+        /// Optional project name filter.
+        project: Option<String>,
+        /// Maximum number of snapshots to display.
+        #[arg(long, default_value_t = 15)]
+        limit: usize,
+    },
+    /// Compare two saved project snapshots to inspect evolution and risk changes.
+    CompareSnapshot {
+        /// Baseline snapshot numeric ID.
+        from_id: i64,
+        /// Target snapshot numeric ID.
+        to_id: i64,
+    },
+    /// Track recovery & work sessions (`start`, `stop`, `list`, `stats`).
+    Session {
+        #[command(subcommand)]
+        action: SessionCommands,
+    },
     /// Run quality benchmarks against the current database.
     Benchmark {
         #[command(subcommand)]
@@ -231,6 +259,42 @@ impl From<CliGraphDirection> for GraphDirection {
             CliGraphDirection::Both => Self::Both,
         }
     }
+}
+
+#[derive(Debug, Subcommand)]
+enum SessionCommands {
+    /// Start tracking a recovery/work session for a project.
+    Start {
+        /// Project name.
+        project: String,
+        /// Optional session kickoff note.
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Stop the currently open work session and summarize modified areas.
+    Stop {
+        /// Optional project name to close a specific project's open session.
+        project: Option<String>,
+        /// Optional self-reported Recovery Quality score (1..=5).
+        #[arg(long)]
+        quality: Option<u8>,
+        /// Optional closing summary note.
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// List recorded work sessions.
+    List {
+        /// Optional project filter.
+        project: Option<String>,
+        /// Maximum number of sessions to show.
+        #[arg(long, default_value_t = 15)]
+        limit: usize,
+    },
+    /// Aggregate session durations, return points, productive areas, and Predicted-vs-Actual stats.
+    Stats {
+        /// Optional project filter.
+        project: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1304,6 +1368,232 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Commands::Snapshot { project, label } => {
+            let snap = store.save_snapshot(&project, label.as_deref())?;
+            let lbl = snap
+                .label
+                .as_deref()
+                .map(|l| format!(" [{l}]"))
+                .unwrap_or_default();
+            println!(
+                "Saved snapshot #{}{} for '{}' at {}",
+                snap.id,
+                lbl,
+                snap.project_name,
+                format_ts(snap.created_at)
+            );
+            println!(
+                "  Health: {} | Files: {} | Relations: {} | Coverage: {:.1}% ({}) | Crit: {} | High: {}",
+                snap.health,
+                snap.active_objects,
+                snap.relations_count,
+                snap.coverage_ratio,
+                snap.documentation_health,
+                snap.critical_risks,
+                snap.high_risks
+            );
+        }
+        Commands::Snapshots { project, limit } => {
+            let snaps = store.list_snapshots(project.as_deref(), limit)?;
+            if snaps.is_empty() {
+                println!("No snapshots saved yet.");
+            } else {
+                for s in snaps {
+                    let lbl = s
+                        .label
+                        .as_deref()
+                        .map(|l| format!(" [{l}]"))
+                        .unwrap_or_default();
+                    println!(
+                        "#{:<3} | {:<12} | {} | {} | files: {} | rels: {} | cov: {:.1}% | crit: {} high: {}{}",
+                        s.id,
+                        s.project_name,
+                        format_ts(s.created_at),
+                        s.health,
+                        s.active_objects,
+                        s.relations_count,
+                        s.coverage_ratio,
+                        s.critical_risks,
+                        s.high_risks,
+                        lbl
+                    );
+                }
+            }
+        }
+        Commands::CompareSnapshot { from_id, to_id } => {
+            let diff = store.compare_snapshots(from_id, to_id)?;
+            println!(
+                "Snapshot Diff: #{} ({}, {}) -> #{} ({}, {})",
+                diff.from.id,
+                diff.from.project_name,
+                format_ts(diff.from.created_at),
+                diff.to.id,
+                diff.to.project_name,
+                format_ts(diff.to.created_at)
+            );
+            println!("\nMetrics Delta:");
+            println!("  Health:         {} -> {}", diff.from.health, diff.to.health);
+            println!("  Active Files:   {} ({:+})", diff.to.active_objects, diff.active_delta);
+            println!("  Deleted Files:  {} ({:+})", diff.to.deleted_objects, diff.deleted_delta);
+            println!("  Relations:      {} ({:+})", diff.to.relations_count, diff.relations_delta);
+            println!(
+                "  Coverage Ratio: {:.1}% ({:+.1}%)",
+                diff.to.coverage_ratio, diff.coverage_delta
+            );
+            println!(
+                "  Critical Risks: {} ({:+})",
+                diff.to.critical_risks, diff.critical_risks_delta
+            );
+            println!("  High Risks:     {} ({:+})", diff.to.high_risks, diff.high_risks_delta);
+
+            if !diff.added_pending_work.is_empty() {
+                println!("\nNew pending work ({}):", diff.added_pending_work.len());
+                for item in &diff.added_pending_work {
+                    println!("  + {item}");
+                }
+            }
+            if !diff.resolved_pending_work.is_empty() {
+                println!("\nResolved pending work ({}):", diff.resolved_pending_work.len());
+                for item in &diff.resolved_pending_work {
+                    println!("  - {item}");
+                }
+            }
+            if !diff.added_risks.is_empty() {
+                println!("\nNew risk areas ({}):", diff.added_risks.len());
+                for item in &diff.added_risks {
+                    println!("  + {item}");
+                }
+            }
+            if !diff.resolved_risks.is_empty() {
+                println!("\nResolved risk areas ({}):", diff.resolved_risks.len());
+                for item in &diff.resolved_risks {
+                    println!("  - {item}");
+                }
+            }
+            if !diff.new_active_areas.is_empty() {
+                println!("\nNew active areas:");
+                for item in &diff.new_active_areas {
+                    println!("  + {item}");
+                }
+            }
+        }
+        Commands::Session { action } => match action {
+            SessionCommands::Start { project, note } => {
+                let s = store.start_session(&project, note.as_deref())?;
+                println!(
+                    "Started session {} for '{}' at {}",
+                    s.id,
+                    s.project_name,
+                    format_ts(s.started_at)
+                );
+                println!(
+                    "  Predicted Difficulty: {} (score: {})",
+                    s.predicted_difficulty, s.predicted_score
+                );
+                if let Some(ref rp) = s.return_point {
+                    println!("  Suggested return point: {rp}");
+                }
+            }
+            SessionCommands::Stop {
+                project,
+                quality,
+                note,
+            } => {
+                let s = store.stop_session(project.as_deref(), quality, note.as_deref())?;
+                let dur = s.duration_secs.unwrap_or(0);
+                println!(
+                    "Stopped session {} for '{}' (duration: {}s)",
+                    s.id, s.project_name, dur
+                );
+                println!(
+                    "  Predicted: {} (score: {}) | Actual Quality: {}",
+                    s.predicted_difficulty,
+                    s.predicted_score,
+                    s.recovery_quality
+                        .map(|q| format!("{q}/5"))
+                        .unwrap_or_else(|| "-".to_string())
+                );
+                println!("  Files touched: {}", s.files_changed_count);
+                if !s.productive_areas.is_empty() {
+                    println!("  Productive areas: {}", s.productive_areas.join(", "));
+                }
+            }
+            SessionCommands::List { project, limit } => {
+                let sessions = store.list_sessions(project.as_deref(), limit)?;
+                if sessions.is_empty() {
+                    println!("No work sessions recorded.");
+                } else {
+                    for s in sessions {
+                        let status = match s.duration_secs {
+                            Some(d) => format!("{d}s"),
+                            None => "active".to_string(),
+                        };
+                        let qual = s
+                            .recovery_quality
+                            .map(|q| format!("{q}/5"))
+                            .unwrap_or_else(|| "-".to_string());
+                        println!(
+                            "{} | {:<12} | {} | {:<8} | pred: {:<6} | qual: {} | files: {} | return: {}",
+                            s.id,
+                            s.project_name,
+                            format_ts(s.started_at),
+                            status,
+                            s.predicted_difficulty,
+                            qual,
+                            s.files_changed_count,
+                            s.return_point.as_deref().unwrap_or("-")
+                        );
+                    }
+                }
+            }
+            SessionCommands::Stats { project } => {
+                let stats = store.session_stats(project.as_deref())?;
+                let scope = stats.project_name.as_deref().unwrap_or("all projects");
+                println!(
+                    "Session Stats ({}): total={} completed={} active={}",
+                    scope, stats.total_sessions, stats.completed_sessions, stats.active_sessions
+                );
+                if let Some(med) = stats.median_duration_secs {
+                    println!(
+                        "  Duration: median {}s | mean {}s",
+                        med,
+                        stats.avg_duration_secs.unwrap_or(med)
+                    );
+                }
+                if let Some(avg_q) = stats.avg_quality {
+                    println!("  Mean Recovery Quality: {:.2} / 5.0", avg_q);
+                }
+                if !stats.frequent_return_points.is_empty() {
+                    println!("\nMost frequent return points:");
+                    for (rp, cnt) in &stats.frequent_return_points {
+                        println!("  - {rp} ({cnt}x)");
+                    }
+                }
+                if !stats.most_productive_areas.is_empty() {
+                    println!("\nMost productive areas:");
+                    for (area, cnt) in &stats.most_productive_areas {
+                        println!("  - {area} ({cnt} sessions)");
+                    }
+                }
+                if !stats.by_predicted_difficulty.is_empty() {
+                    println!("\nPredicted vs Actual:");
+                    for row in &stats.by_predicted_difficulty {
+                        let avg_d = row
+                            .avg_duration_secs
+                            .map(|d| format!("{d}s"))
+                            .unwrap_or_else(|| "-".to_string());
+                        let avg_q = row
+                            .avg_quality
+                            .map(|q| format!("{q:.1}/5"))
+                            .unwrap_or_else(|| "-".to_string());
+                        println!(
+                            "  - {:<6} | sessions: {} | avg duration: {} | avg quality: {}",
+                            row.difficulty, row.sessions, avg_d, avg_q
+                        );
+                    }
+                }
+            }
+        },
         Commands::Benchmark { action } => match action {
             BenchmarkCommands::Search { config, save } => {
                 let cases = load_benchmark_cases(&config)?;

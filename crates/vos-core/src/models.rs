@@ -425,6 +425,15 @@ impl ProjectHealth {
             Self::Empty => "Empty",
         }
     }
+
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "Active" => Self::Active,
+            "Warm" => Self::Warm,
+            "Dormant" => Self::Dormant,
+            _ => Self::Empty,
+        }
+    }
 }
 
 impl fmt::Display for ProjectHealth {
@@ -714,6 +723,15 @@ impl DocumentationHealth {
             Self::Empty => "Empty",
         }
     }
+
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "Good" => Self::Good,
+            "Partial" => Self::Partial,
+            "Low" => Self::Low,
+            _ => Self::Empty,
+        }
+    }
 }
 
 impl fmt::Display for DocumentationHealth {
@@ -779,6 +797,14 @@ impl RecoveryDifficulty {
             Self::Hard => "Hard",
         }
     }
+
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "Easy" => Self::Easy,
+            "Hard" => Self::Hard,
+            _ => Self::Medium,
+        }
+    }
 }
 
 impl fmt::Display for RecoveryDifficulty {
@@ -793,4 +819,87 @@ pub struct RecoveryPrediction {
     pub difficulty: RecoveryDifficulty,
     pub score: usize,
     pub factors: Vec<String>,
+}
+/// Persisted point-in-time snapshot of project status and risks (`vos snapshot`).
+#[derive(Debug, Clone)]
+pub struct ProjectSnapshot {
+    pub id: i64,
+    pub project_id: String,
+    pub project_name: String,
+    pub label: Option<String>,
+    pub health: ProjectHealth,
+    pub active_objects: usize,
+    pub deleted_objects: usize,
+    pub relations_count: usize,
+    pub coverage_ratio: f64,
+    pub documentation_health: DocumentationHealth,
+    pub critical_risks: usize,
+    pub high_risks: usize,
+    pub open_questions: Vec<String>,
+    pub pending_work: Vec<String>,
+    pub active_areas: Vec<String>,
+    pub risk_areas: Vec<String>,
+    pub recent_changes: Vec<String>,
+    pub created_at: i64,
+}
+
+/// Deterministic comparison between two saved snapshots (`vos compare-snapshot`).
+#[derive(Debug, Clone)]
+pub struct SnapshotDiff {
+    pub from: ProjectSnapshot,
+    pub to: ProjectSnapshot,
+    pub active_delta: isize,
+    pub deleted_delta: isize,
+    pub relations_delta: isize,
+    pub coverage_delta: f64,
+    pub critical_risks_delta: isize,
+    pub high_risks_delta: isize,
+    pub added_pending_work: Vec<String>,
+    pub resolved_pending_work: Vec<String>,
+    pub added_risks: Vec<String>,
+    pub resolved_risks: Vec<String>,
+    pub new_active_areas: Vec<String>,
+}
+
+/// Persisted developer work/recovery session (`vos session start|stop`).
+#[derive(Debug, Clone)]
+pub struct WorkSession {
+    pub id: String,
+    pub project_id: String,
+    pub project_name: String,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+    pub duration_secs: Option<i64>,
+    pub predicted_difficulty: RecoveryDifficulty,
+    pub predicted_score: usize,
+    pub recovery_quality: Option<u8>,
+    pub return_point: Option<String>,
+    pub start_note: Option<String>,
+    pub stop_note: Option<String>,
+    pub files_changed_count: usize,
+    pub productive_areas: Vec<String>,
+}
+
+/// Breakdown of recorded sessions by predicted difficulty tier.
+#[derive(Debug, Clone)]
+pub struct DifficultyStats {
+    pub difficulty: RecoveryDifficulty,
+    pub sessions: usize,
+    pub avg_duration_secs: Option<i64>,
+    pub avg_quality: Option<f64>,
+}
+
+/// Aggregated recovery and productivity analytics (`vos session stats`).
+#[derive(Debug, Clone)]
+pub struct SessionStats {
+    pub project_name: Option<String>,
+    pub total_sessions: usize,
+    pub active_sessions: usize,
+    pub completed_sessions: usize,
+    pub median_duration_secs: Option<i64>,
+    pub avg_duration_secs: Option<i64>,
+    pub avg_quality: Option<f64>,
+    pub frequent_return_points: Vec<(String, usize)>,
+    pub most_productive_areas: Vec<(String, usize)>,
+    pub by_predicted_difficulty: Vec<DifficultyStats>,
 }
