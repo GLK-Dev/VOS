@@ -151,11 +151,15 @@ if ($predRows.Count -gt 0) {
 # fall back to the markdown-derived values when the SQLite stats are unavailable or older.
 $statsSource = 'markdown'
 if ($dbSessionStats -and $null -ne $dbSessionStats.false_alarms -and $null -ne $dbSessionStats.missed_difficulty) {
+    $mdCounts = "$falseAlarms/$hardTotal/$missedDiff/$easyTotal"
     $falseAlarms = [int]$dbSessionStats.false_alarms
     $hardTotal = [int]$dbSessionStats.hard_scored_sessions
     $missedDiff = [int]$dbSessionStats.missed_difficulty
     $easyTotal = [int]$dbSessionStats.easy_scored_sessions
     $statsSource = 'sqlite'
+    if ($mdCounts -ne "$falseAlarms/$hardTotal/$missedDiff/$easyTotal" -and -not $Json) {
+        Write-Warning "SQLite counters (FA/Hard/MD/Easy = $falseAlarms/$hardTotal/$missedDiff/$easyTotal) differ from the markdown log ($mdCounts); the log may contain sessions that were not recorded via 'vos session'."
+    }
 }
 
 $helpfulCounts = @{}
