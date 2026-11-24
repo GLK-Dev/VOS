@@ -23,6 +23,9 @@ pub(crate) enum RawRef {
     UniqueTitleRef {
         title: String,
     },
+    CargoLibIdent {
+        ident: String,
+    },
 }
 
 /// Scanned source object metadata and extracted references waiting for ID resolution.
@@ -62,13 +65,24 @@ impl ProjectLookup {
             {
                 let crate_ident = dir_name.replace('-', "_").to_ascii_lowercase();
                 if is_ident(&crate_ident) {
-                    self.by_workspace_crate
-                        .entry(crate_ident)
-                        .and_modify(|slot| *slot = None)
-                        .or_insert_with(|| Some((src_dir.to_path_buf(), object_id)));
+                    self.register_workspace_crate(crate_ident, src_dir.to_path_buf(), object_id);
                 }
             }
         }
+    }
+
+    fn register_workspace_crate(&mut self, ident: String, src_dir: PathBuf, lib_id: String) {
+        self.by_workspace_crate
+            .entry(ident)
+            .and_modify(|slot| {
+                if let Some((existing_dir, _)) = slot
+                    && existing_dir == &src_dir
+                {
+                    return;
+                }
+                *slot = None;
+            })
+            .or_insert_with(|| Some((src_dir, lib_id)));
     }
 
     fn lookup_workspace_crate(&self, ident: &str) -> Option<(&Path, &str)> {
@@ -113,6 +127,15 @@ pub(crate) fn extract_refs(path: &Path, kind: ObjectKind, text: &str) -> Vec<Raw
     if is_markdown {
         extract_markdown_links(text, &mut refs);
     }
+    if path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.eq_ignore_ascii_case("Cargo.toml"))
+    {
+        for ident in extract_cargo_lib_idents(text) {
+            refs.push(RawRef::CargoLibIdent { ident });
+        }
+    }
 
     let allow_backslash = matches!(kind, ObjectKind::Note | ObjectKind::Config)
         || path.extension().and_then(|e| e.to_str()).is_some_and(|ext| {
@@ -135,6 +158,26 @@ pub(crate) fn resolve_relations(
             .entry(obj.project_id.clone())
             .or_default()
             .insert(obj.id.clone(), &obj.path, &obj.title);
+    }
+
+    // Register explicit crate identifiers declared in `[package]` / `[lib]` of scanned `Cargo.toml`.
+    for src in scanned {
+        let Some(lookup) = lookups.get_mut(&src.project_id) else {
+            continue;
+        };
+        let Some(manifest_dir) = Path::new(&src.path).parent() else {
+            continue;
+        };
+        let src_dir = manifest_dir.join("src");
+        let lib_path = src_dir.join("lib.rs");
+        let Some(lib_id) = lookup.lookup_path(&lib_path).map(str::to_string) else {
+            continue;
+        };
+        for raw in &src.raw_refs {
+            if let RawRef::CargoLibIdent { ident } = raw {
+                lookup.register_workspace_crate(ident.clone(), src_dir.clone(), lib_id.clone());
+            }
+        }
     }
 
     let mut edges = Vec::new();
@@ -191,6 +234,7 @@ pub(crate) fn resolve_relations(
                         )
                     })
                 }
+                RawRef::CargoLibIdent { .. } => None,
             };
 
             let Some((to_id, rel_type, detail)) = resolved else {
@@ -707,6 +751,64 @@ fn is_ident(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+fn extract_cargo_lib_idents(text: &str) -> Vec<String> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Section {
+        Other,
+        Package,
+        Lib,
+    }
+
+    let mut section = Section::Other;
+    let mut pkg_name: Option<String> = None;
+    let mut lib_name: Option<String> = None;
+
+    for line in text.lines() {
+        let trimmed = line.split('#').next().unwrap_or("").trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            let header = trimmed.trim_matches(|c| c == '[' || c == ']').trim();
+            section = if trimmed.starts_with("[[") {
+                Section::Other
+            } else {
+                match header {
+                    "package" => Section::Package,
+                    "lib" => Section::Lib,
+                    _ => Section::Other,
+                }
+            };
+            continue;
+        }
+        if matches!(section, Section::Package | Section::Lib)
+            && let Some((key, value)) = trimmed.split_once('=')
+            && key.trim() == "name"
+        {
+            let clean = value
+                .trim()
+                .trim_matches(|c| c == '"' || c == '\'')
+                .replace('-', "_")
+                .to_ascii_lowercase();
+            if is_ident(&clean) {
+                match section {
+                    Section::Package => pkg_name = Some(clean),
+                    Section::Lib => lib_name = Some(clean),
+                    Section::Other => {}
+                }
+            }
+        }
+    }
+
+    if let Some(lib) = lib_name {
+        vec![lib]
+    } else if let Some(pkg) = pkg_name {
+        vec![pkg]
+    } else {
+        Vec::new()
+    }
+}
+
 fn normalize_lexical_key(raw: &str) -> String {
     let normalized_slashes = raw.replace('\\', "/");
     let mut parts: Vec<String> = Vec::new();
@@ -865,6 +967,67 @@ use super::util;
         let ps1_refs = extract_refs(Path::new("scripts/test_all.ps1"), ObjectKind::Code, ps1);
         assert!(ps1_refs.contains(&RawRef::PathRef {
             raw: "scripts/run_v112_sprint.ps1".to_string(),
+        }));
+    }
+
+    #[test]
+    fn resolves_cargo_toml_package_and_lib_crate_names() {
+        let manifest = "[package]\nname = \"forge-editor\"\nversion = \"0.1.0\"\n[[bin]]\nname = \"tessera-forge\"\npath = \"src/main.rs\"\n";
+        let main_src = "use forge_editor::ForgeEditor;\n";
+        let lib_src = "pub struct ForgeEditor;\n";
+
+        let scanned = vec![
+            ScannedObjectRefs {
+                object_id: "obj_toml".to_string(),
+                project_id: Some("p1".to_string()),
+                path: "/ws/apps/forge/Cargo.toml".to_string(),
+                raw_refs: extract_refs(Path::new("/ws/apps/forge/Cargo.toml"), ObjectKind::Config, manifest),
+            },
+            ScannedObjectRefs {
+                object_id: "obj_main".to_string(),
+                project_id: Some("p1".to_string()),
+                path: "/ws/apps/forge/src/main.rs".to_string(),
+                raw_refs: extract_refs(Path::new("/ws/apps/forge/src/main.rs"), ObjectKind::Code, main_src),
+            },
+            ScannedObjectRefs {
+                object_id: "obj_lib".to_string(),
+                project_id: Some("p1".to_string()),
+                path: "/ws/apps/forge/src/lib.rs".to_string(),
+                raw_refs: extract_refs(Path::new("/ws/apps/forge/src/lib.rs"), ObjectKind::Code, lib_src),
+            },
+        ];
+        let active = vec![
+            ActiveObjectRef {
+                id: "obj_toml".to_string(),
+                path: "/ws/apps/forge/Cargo.toml".to_string(),
+                kind: ObjectKind::Config,
+                title: "Cargo.toml".to_string(),
+                project_id: Some("p1".to_string()),
+            },
+            ActiveObjectRef {
+                id: "obj_main".to_string(),
+                path: "/ws/apps/forge/src/main.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "main.rs".to_string(),
+                project_id: Some("p1".to_string()),
+            },
+            ActiveObjectRef {
+                id: "obj_lib".to_string(),
+                path: "/ws/apps/forge/src/lib.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "lib.rs".to_string(),
+                project_id: Some("p1".to_string()),
+            },
+        ];
+
+        let edges = resolve_relations(&scanned, &active, &HashMap::new());
+        assert!(edges.iter().any(|e| {
+            e.from_object_id == "obj_main"
+                && e.to_object_id == "obj_lib"
+                && e.relation_type == RelationType::RustUse
+        }));
+        assert!(!scanned[0].raw_refs.contains(&RawRef::CargoLibIdent {
+            ident: "tessera_forge".to_string(),
         }));
     }
 }

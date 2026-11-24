@@ -62,7 +62,11 @@ $rows = $projects | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
     }
 } | Sort-Object Order
 
-$benchOut = & $VosBin benchmark search --config $benchPath
+$benchOut = & $VosBin benchmark search --config $benchPath --min-top5 90 --min-mrr 0.75
+if ($LASTEXITCODE -ne 0) {
+    $benchOut | Write-Host
+    throw "Search benchmark regression: failed --min-top5 90 --min-mrr 0.75 gate"
+}
 
 $sb = [System.Text.StringBuilder]::new()
 [void]$sb.AppendLine("# VOS v1.1.2 Multi-Project Automated Sprint Audit")
