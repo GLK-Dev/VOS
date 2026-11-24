@@ -282,6 +282,12 @@ enum Commands {
         #[command(subcommand)]
         action: SessionCommands,
     },
+    /// Verify SQLite integrity, FTS5 index parity, relation hygiene, and project root paths.
+    Doctor {
+        /// Rebuild FTS5 indexes and prune stale relations pointing to deleted objects.
+        #[arg(long)]
+        repair: bool,
+    },
     /// Run quality benchmarks against the current database.
     Benchmark {
         #[command(subcommand)]
@@ -1960,6 +1966,37 @@ fn main() -> Result<()> {
                 }
             }
         },
+        Commands::Doctor { repair } => {
+            let report = store.doctor(repair)?;
+            if json {
+                return print_json(&report);
+            }
+            println!(
+                "VOS Doctor: {}",
+                if report.healthy { "HEALTHY" } else { "ISSUES DETECTED" }
+            );
+            println!("  SQLite check:       {} ({})", report.sqlite_ok, report.sqlite_detail);
+            println!(
+                "  Objects FTS5 parity: {} / {}",
+                report.objects_fts_count, report.objects_count
+            );
+            println!(
+                "  Chunks FTS5 parity:  {} / {}",
+                report.chunks_fts_count, report.chunks_count
+            );
+            println!("  Orphaned objects:    {}", report.orphaned_objects);
+            println!("  Stale deleted rels:  {}", report.stale_deleted_relations);
+            println!("  Active sessions:     {}", report.active_sessions);
+            if !report.missing_project_roots.is_empty() {
+                println!("  Missing project roots:");
+                for m in &report.missing_project_roots {
+                    println!("    - {m}");
+                }
+            }
+            if report.repaired {
+                println!("  Repair applied:      FTS5 rebuilt & stale deleted relations pruned");
+            }
+        }
         Commands::Benchmark { action } => match action {
             BenchmarkCommands::Search { config, save } => {
                 let cases = load_benchmark_cases(&config)?;

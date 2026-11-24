@@ -674,3 +674,26 @@ fn cli_project_remove_purges_objects_fts_snapshots_and_sessions() {
     let sess = assert_vos_ok(&db, &["session", "list", "--json"]);
     assert!(serde_json::from_str::<Vec<serde_json::Value>>(&sess).unwrap().is_empty());
 }
+
+#[test]
+fn cli_doctor_reports_healthy_index_and_missing_root_paths() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("doccli");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("README.md"), "# DocCli\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "doccli", proj.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "doccli"]);
+
+    let doc_json = assert_vos_ok(&db, &["doctor", "--json"]);
+    let doc_val: serde_json::Value = serde_json::from_str(&doc_json).expect("doctor json");
+    assert_eq!(doc_val["healthy"], true);
+    assert_eq!(doc_val["sqlite_ok"], true);
+    assert_eq!(doc_val["objects_count"], 1);
+    assert_eq!(doc_val["objects_fts_count"], 1);
+
+    let repair_out = assert_vos_ok(&db, &["doctor", "--repair"]);
+    assert!(repair_out.contains("VOS Doctor: HEALTHY"));
+    assert!(repair_out.contains("Repair applied:"));
+}

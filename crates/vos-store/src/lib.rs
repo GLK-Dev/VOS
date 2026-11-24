@@ -21,7 +21,7 @@ use thiserror::Error;
 use tracing::info;
 use vos_core::VosError;
 use vos_core::util::{canonicalize_path, is_path_within, new_id, now_unix};
-use vos_core::{EventType, ObjectRecord, Project, ProjectSummary};
+use vos_core::{DoctorReport, EventType, ObjectRecord, Project, ProjectSummary};
 
 pub use batch::{IndexBatch, RelationInput, UpsertObjectInput, UpsertOutcome};
 pub use benchmark::load_benchmark_cases;
@@ -368,11 +368,200 @@ impl Store {
         tx.commit()?;
         Ok(details.object)
     }
+
+    /// Verifies SQLite, FTS5 shadow-table parity, relation hygiene, and project root paths.
+    pub fn doctor(&mut self, repair: bool) -> Result<DoctorReport, StoreError> {
+        let mut repaired = false;
+        if repair {
+            let tx = self.conn.transaction()?;
+            tx.execute(
+                "DELETE FROM relations
+                 WHERE from_id IN (SELECT id FROM objects WHERE is_deleted = 1)
+                    OR to_id IN (SELECT id FROM objects WHERE is_deleted = 1)",
+                [],
+            )?;
+            tx.execute("INSERT INTO objects_fts(objects_fts) VALUES('rebuild')", [])?;
+            tx.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')", [])?;
+            tx.commit()?;
+            repaired = true;
+        }
+
+        let sqlite_detail: String = self
+            .conn
+            .query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+        let mut sqlite_ok = sqlite_detail.eq_ignore_ascii_case("ok");
+
+        if sqlite_ok
+            && (self
+                .conn
+                .execute(
+                    "INSERT INTO objects_fts(objects_fts) VALUES('integrity-check')",
+                    [],
+                )
+                .is_err()
+                || self
+                    .conn
+                    .execute(
+                        "INSERT INTO chunks_fts(chunks_fts) VALUES('integrity-check')",
+                        [],
+                    )
+                    .is_err())
+        {
+            sqlite_ok = false;
+        }
+
+        let objects_count: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM objects", [], |r| r.get(0))?;
+        let objects_fts_count: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM objects_fts_docsize", [], |r| r.get(0))?;
+        let chunks_count: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))?;
+        let chunks_fts_count: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM chunks_fts_docsize", [], |r| r.get(0))?;
+        let orphaned_objects: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM objects WHERE project_id IS NULL",
+            [],
+            |r| r.get(0),
+        )?;
+        let stale_deleted_relations: i64 = self.conn.query_row(
+            "SELECT COUNT(*)
+             FROM relations r
+             JOIN objects o_from ON o_from.id = r.from_id
+             JOIN objects o_to ON o_to.id = r.to_id
+             WHERE o_from.is_deleted = 1 OR o_to.is_deleted = 1",
+            [],
+            |r| r.get(0),
+        )?;
+        let active_sessions: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM work_sessions WHERE ended_at IS NULL",
+            [],
+            |r| r.get(0),
+        )?;
+
+        let mut proj_stmt = self
+            .conn
+            .prepare("SELECT name, root_path FROM projects ORDER BY name ASC")?;
+        let missing_project_roots: Vec<String> = proj_stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter_map(|(name, root)| {
+                let p = root?;
+                if !Path::new(&p).exists() {
+                    Some(format!("{name} ({p})"))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let obj_c = objects_count.max(0) as usize;
+        let obj_fts_c = objects_fts_count.max(0) as usize;
+        let chk_c = chunks_count.max(0) as usize;
+        let chk_fts_c = chunks_fts_count.max(0) as usize;
+        let orph = orphaned_objects.max(0) as usize;
+        let stale_rels = stale_deleted_relations.max(0) as usize;
+        let act_sess = active_sessions.max(0) as usize;
+
+        let healthy = sqlite_ok
+            && obj_c == obj_fts_c
+            && chk_c == chk_fts_c
+            && orph == 0
+            && stale_rels == 0
+            && missing_project_roots.is_empty();
+
+        Ok(DoctorReport {
+            sqlite_ok,
+            sqlite_detail,
+            objects_count: obj_c,
+            objects_fts_count: obj_fts_c,
+            chunks_count: chk_c,
+            chunks_fts_count: chk_fts_c,
+            orphaned_objects: orph,
+            stale_deleted_relations: stale_rels,
+            active_sessions: act_sess,
+            missing_project_roots,
+            repaired,
+            healthy,
+        })
+    }
 }
 
+#[cfg(test)]
+mod doctor_tests {
+    use super::*;
 
+    #[test]
+    fn doctor_detects_and_repairs_stale_relations_and_fts_parity() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("docproj", None, None).unwrap();
+        let mut batch = store.begin_index_batch().unwrap();
+        let a = batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/d/a.rs".to_string(),
+                kind: vos_core::ObjectKind::Code,
+                title: "a.rs".to_string(),
+                summary: None,
+                content_hash: "ha".to_string(),
+                size_bytes: 10,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec!["fn a() {}".to_string()],
+            })
+            .unwrap()
+            .object_id()
+            .to_string();
+        let b = batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id),
+                path: "/d/b.rs".to_string(),
+                kind: vos_core::ObjectKind::Code,
+                title: "b.rs".to_string(),
+                summary: None,
+                content_hash: "hb".to_string(),
+                size_bytes: 10,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec!["fn b() {}".to_string()],
+            })
+            .unwrap()
+            .object_id()
+            .to_string();
+        batch
+            .sync_relations(
+                std::slice::from_ref(&a),
+                &[RelationInput {
+                    from_object_id: a.clone(),
+                    to_object_id: b.clone(),
+                    relation_type: vos_core::RelationType::RustUse,
+                    confidence: 0.9,
+                    detail: None,
+                }],
+            )
+            .unwrap();
+        batch.commit().unwrap();
 
+        assert!(store.doctor(false).unwrap().healthy);
 
+        // Simulate a soft-deleted target leaving a stale relation edge behind.
+        store
+            .conn
+            .execute("UPDATE objects SET is_deleted = 1 WHERE id = ?1", params![b])
+            .unwrap();
+        let pre = store.doctor(false).unwrap();
+        assert!(!pre.healthy);
+        assert_eq!(pre.stale_deleted_relations, 1);
 
-
-
+        let fixed = store.doctor(true).unwrap();
+        assert!(fixed.repaired);
+        assert_eq!(fixed.stale_deleted_relations, 0);
+        assert!(fixed.healthy);
+    }
+}

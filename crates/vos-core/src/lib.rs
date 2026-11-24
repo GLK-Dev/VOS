@@ -8,7 +8,7 @@ pub use error::VosError;
 pub use models::{
     ActiveArea, AreaCoverage, AreaOwnership, AreaRisk, BenchmarkRunRecord, CategoryBenchmarkStats,
     ChangedSinceReport, ConceptExplanation, ContinueSuggestion, CoverageTier, DifficultyStats,
-    DocQualityEntry, DocQualityReport, DocQualityTier, DocumentationHealth, DriftFinding,
+    DocQualityEntry, DocQualityReport, DocQualityTier, DoctorReport, DocumentationHealth, DriftFinding,
     EventRecord, EventType, GraphDirection, GraphEdge, GraphHub, GraphTreeNode, HubImportance,
     ObjectDetails, ObjectImpact, ObjectKind, ObjectRecord, ObjectWhy, Project, ProjectActivity, ProjectContinue,
     ProjectContext, ProjectCoverage, ProjectDrift, ProjectEvolution, ProjectGraph, ProjectHealth,

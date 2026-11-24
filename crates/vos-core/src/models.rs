@@ -981,3 +981,20 @@ pub struct TagSummary {
     pub tag: String,
     pub object_count: usize,
 }
+
+/// Database and index health summary returned by `vos doctor`.
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorReport {
+    pub sqlite_ok: bool,
+    pub sqlite_detail: String,
+    pub objects_count: usize,
+    pub objects_fts_count: usize,
+    pub chunks_count: usize,
+    pub chunks_fts_count: usize,
+    pub orphaned_objects: usize,
+    pub stale_deleted_relations: usize,
+    pub active_sessions: usize,
+    pub missing_project_roots: Vec<String>,
+    pub repaired: bool,
+    pub healthy: bool,
+}
