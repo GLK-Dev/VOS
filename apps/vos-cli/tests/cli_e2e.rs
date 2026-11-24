@@ -627,4 +627,18 @@ fn cli_show_tag_and_untag_disambiguate_with_project_flag() {
     let after_val: serde_json::Value = serde_json::from_str(&after_untag).expect("show json after untag");
     assert_eq!(after_val["tags"].as_array().unwrap().len(), 1);
     assert_eq!(after_val["tags"][0][0], "core");
+
+    let tags_json = assert_vos_ok(&db, &["tags", "--project", "repo1", "--json"]);
+    let tags_arr: Vec<serde_json::Value> = serde_json::from_str(&tags_json).expect("tags json");
+    assert_eq!(tags_arr.len(), 1);
+    assert_eq!(tags_arr[0]["tag"], "core");
+
+    let by_tag_json = assert_vos_ok(&db, &["search", "--tag", "core", "--project", "repo1", "--json"]);
+    let by_tag_arr: Vec<serde_json::Value> = serde_json::from_str(&by_tag_json).expect("search --tag json");
+    assert_eq!(by_tag_arr.len(), 1);
+    assert_eq!(by_tag_arr[0]["title"], "lib.rs");
+
+    let by_q_tag = assert_vos_ok(&db, &["search", "one", "--tag", "core", "--project", "repo1", "--json"]);
+    let by_q_arr: Vec<serde_json::Value> = serde_json::from_str(&by_q_tag).expect("search query --tag json");
+    assert_eq!(by_q_arr.len(), 1);
 }

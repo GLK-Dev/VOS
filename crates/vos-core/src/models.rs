@@ -974,3 +974,10 @@ pub struct ObjectImpact {
     pub transitive_dependents: usize,
     pub sample_dependents: Vec<String>,
 }
+
+/// Summary count of a tag attached across active objects.
+#[derive(Debug, Clone, Serialize)]
+pub struct TagSummary {
+    pub tag: String,
+    pub object_count: usize,
+}

@@ -3,7 +3,7 @@ use std::path::Path;
 
 use rusqlite::params;
 use vos_core::util::search_visibility;
-use vos_core::{ObjectKind, QueryIntent, SearchHit, SearchSignal, SearchVisibility};
+use vos_core::{ObjectKind, QueryIntent, SearchHit, SearchSignal, SearchVisibility, TagSummary};
 
 use crate::concepts::{ConceptDictionary, detect_query_intent, is_concept_document};
 use crate::{Store, StoreError};
@@ -71,6 +71,31 @@ impl Store {
         limit: usize,
         include_internal: bool,
     ) -> Result<Vec<SearchHit>, StoreError> {
+        self.search_filtered(Some(query), project_name, None, limit, include_internal)
+    }
+
+    /// Searches indexed objects with optional FTS query, project scope, and tag filter.
+    pub fn search_filtered(
+        &self,
+        query: Option<&str>,
+        project_name: Option<&str>,
+        tag: Option<&str>,
+        limit: usize,
+        include_internal: bool,
+    ) -> Result<Vec<SearchHit>, StoreError> {
+        let clean_tag = tag
+            .map(|t| t.trim().to_lowercase())
+            .filter(|t| !t.is_empty());
+        let clean_query = query.map(str::trim).filter(|q| !q.is_empty());
+        let requested_limit = limit.clamp(1, 200);
+
+        let Some(query) = clean_query else {
+            let tag_name = clean_tag.ok_or_else(|| {
+                StoreError::InvalidInput("provide a search query or --tag".to_string())
+            })?;
+            return self.search_by_tag(&tag_name, project_name, requested_limit);
+        };
+
         let and_query = build_fts_query(query)?;
         let query_terms: Vec<String> = query
             .split_whitespace()
@@ -82,7 +107,6 @@ impl Store {
         let concepts = ConceptDictionary::load();
         let intent = detect_query_intent(query, &query_terms, &concepts);
 
-        let requested_limit = limit.clamp(1, 200);
         let pool_limit = (requested_limit * 6).max(60) as i64;
         let mut merged: HashMap<String, SearchCandidate> = HashMap::new();
 
@@ -90,6 +114,7 @@ impl Store {
         self.collect_fts_stage(
             &and_query,
             project_name,
+            clean_tag.as_deref(),
             pool_limit,
             StageKind::Stage1And,
             intent,
@@ -105,6 +130,7 @@ impl Store {
             self.collect_fts_stage(
                 &or_query,
                 project_name,
+                clean_tag.as_deref(),
                 pool_limit,
                 StageKind::Stage2Or,
                 intent,
@@ -120,6 +146,7 @@ impl Store {
             self.collect_fts_stage(
                 &concept_fts,
                 project_name,
+                clean_tag.as_deref(),
                 pool_limit,
                 StageKind::ConceptExpansion,
                 intent,
@@ -143,10 +170,84 @@ impl Store {
         Ok(hits)
     }
 
+    /// Lists all active tags with object counts, optionally filtered by project.
+    pub fn list_tags(
+        &self,
+        project_name: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<TagSummary>, StoreError> {
+        let capped = limit.clamp(1, 200) as i64;
+        let mut stmt = self.conn.prepare(
+            "SELECT t.tag, COUNT(DISTINCT t.object_id) AS cnt
+             FROM tags t
+             JOIN objects o ON o.id = t.object_id
+             LEFT JOIN projects p ON p.id = o.project_id
+             WHERE o.is_deleted = 0
+               AND (?1 IS NULL OR p.name = ?1)
+             GROUP BY t.tag
+             ORDER BY cnt DESC, t.tag ASC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![project_name, capped], |row| {
+            Ok(TagSummary {
+                tag: row.get(0)?,
+                object_count: row.get::<_, i64>(1)?.max(0) as usize,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+    }
+
+    fn search_by_tag(
+        &self,
+        tag_name: &str,
+        project_name: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT o.id, p.name, o.title, o.path, o.kind, o.is_noise, COALESCE(o.summary, '')
+             FROM tags t
+             JOIN objects o ON o.id = t.object_id
+             LEFT JOIN projects p ON p.id = o.project_id
+             WHERE o.is_deleted = 0
+               AND t.tag = ?1
+               AND (?2 IS NULL OR p.name = ?2)
+             ORDER BY o.is_noise ASC, o.modified_at DESC, o.title ASC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![tag_name, project_name, limit as i64], |row| {
+            let kind_str: String = row.get(4)?;
+            let is_noise: i64 = row.get(5)?;
+            let kind = ObjectKind::from_db(&kind_str);
+            let intent = if matches!(kind, ObjectKind::Note | ObjectKind::Doc) {
+                QueryIntent::Documentation
+            } else {
+                QueryIntent::Code
+            };
+            Ok(SearchHit {
+                object_id: row.get(0)?,
+                project_name: row.get(1)?,
+                title: row.get(2)?,
+                path: row.get(3)?,
+                kind,
+                is_noise: is_noise != 0,
+                snippet: row.get(6)?,
+                score: 1.0,
+                intent,
+                signals: vec![SearchSignal {
+                    label: format!("tag match ({tag_name})"),
+                    delta: 1.0,
+                }],
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn collect_fts_stage(
         &self,
         fts_query: &str,
         project_name: Option<&str>,
+        tag_filter: Option<&str>,
         pool_limit: i64,
         stage: StageKind,
         intent: QueryIntent,
@@ -168,11 +269,14 @@ impl Store {
                  WHERE chunks_fts MATCH ?1
                    AND o.is_deleted = 0
                    AND (?2 IS NULL OR p.name = ?2)
+                   AND (?4 IS NULL OR EXISTS (
+                       SELECT 1 FROM tags t WHERE t.object_id = o.id AND t.tag = ?4
+                   ))
                  ORDER BY rank
                  LIMIT ?3",
             )?;
 
-            let rows = stmt.query_map(params![fts_query, project_name, pool_limit], |row| {
+            let rows = stmt.query_map(params![fts_query, project_name, pool_limit, tag_filter], |row| {
                 let kind_str: String = row.get(4)?;
                 let is_noise: i64 = row.get(5)?;
                 Ok((
@@ -250,11 +354,14 @@ impl Store {
                  WHERE objects_fts MATCH ?1
                    AND o.is_deleted = 0
                    AND (?2 IS NULL OR p.name = ?2)
+                   AND (?4 IS NULL OR EXISTS (
+                       SELECT 1 FROM tags t WHERE t.object_id = o.id AND t.tag = ?4
+                   ))
                  ORDER BY rank
                  LIMIT ?3",
             )?;
 
-            let rows = stmt.query_map(params![fts_query, project_name, pool_limit], |row| {
+            let rows = stmt.query_map(params![fts_query, project_name, pool_limit, tag_filter], |row| {
                 let kind_str: String = row.get(4)?;
                 let is_noise: i64 = row.get(5)?;
                 Ok((
@@ -610,5 +717,58 @@ mod tests {
             .iter()
             .any(|s| s.label == "internal artifact penalty")));
     }
-}
 
+    #[test]
+    fn search_tag_filter_and_tag_listing_work() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("tagrepo", None, None).unwrap();
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(crate::UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/auth.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "auth.rs".to_string(),
+                summary: Some("Token validation".to_string()),
+                content_hash: "h1".to_string(),
+                size_bytes: 60,
+                modified_at: 200,
+                is_noise: false,
+                chunks: vec!["pub fn verify_token() {}".to_string()],
+            })
+            .unwrap();
+        batch
+            .upsert_object(crate::UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/other.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "other.rs".to_string(),
+                summary: Some("Token helper".to_string()),
+                content_hash: "h2".to_string(),
+                size_bytes: 60,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec!["pub fn token_format() {}".to_string()],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        store
+            .add_tags_scoped("auth.rs", Some("tagrepo"), &["auth".into(), "security".into()])
+            .unwrap();
+        let tags = store.list_tags(Some("tagrepo"), 10).unwrap();
+        assert_eq!(tags.len(), 2);
+
+        let tag_only = store
+            .search_filtered(None, Some("tagrepo"), Some("auth"), 10, false)
+            .unwrap();
+        assert_eq!(tag_only.len(), 1);
+        assert_eq!(tag_only[0].title, "auth.rs");
+
+        let query_and_tag = store
+            .search_filtered(Some("token"), Some("tagrepo"), Some("auth"), 10, false)
+            .unwrap();
+        assert_eq!(query_and_tag.len(), 1);
+        assert_eq!(query_and_tag[0].title, "auth.rs");
+    }
+}

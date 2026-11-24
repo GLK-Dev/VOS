@@ -56,13 +56,16 @@ enum Commands {
         #[arg(long)]
         no_ignore: bool,
     },
-    /// Full-text search across indexed objects and chunks.
+    /// Full-text search across indexed objects and chunks (optionally filtered by --tag).
     Search {
-        /// Search query string.
-        query: String,
+        /// Search query string (optional when --tag is specified).
+        query: Option<String>,
         /// Restrict results to a specific project.
         #[arg(long)]
         project: Option<String>,
+        /// Filter results by attached tag (works alone or combined with query).
+        #[arg(long)]
+        tag: Option<String>,
         /// Maximum number of results to display.
         #[arg(long, default_value_t = 10)]
         limit: usize,
@@ -102,6 +105,15 @@ enum Commands {
         /// One or more tags to remove.
         #[arg(required = true)]
         tags: Vec<String>,
+    },
+    /// List tags across indexed objects with object counts.
+    Tags {
+        /// Optional project filter.
+        #[arg(long)]
+        project: Option<String>,
+        /// Maximum number of tags to show.
+        #[arg(long, default_value_t = 30)]
+        limit: usize,
     },
     /// Recover current project context (prioritized files, breakdown, recent timeline).
     Context {
@@ -469,16 +481,29 @@ fn main() -> Result<()> {
         Commands::Search {
             query,
             project,
+            tag,
             limit,
             explain,
             include_internal,
         } => {
-            let hits = store.search_with_options(&query, project.as_deref(), limit, include_internal)?;
+            let hits = store.search_filtered(
+                query.as_deref(),
+                project.as_deref(),
+                tag.as_deref(),
+                limit,
+                include_internal,
+            )?;
             if json {
                 return print_json(&hits);
             }
             if hits.is_empty() {
-                println!("No matches found for \"{query}\".");
+                let label = match (query.as_deref(), tag.as_deref()) {
+                    (Some(q), Some(t)) => format!("\"{q}\" with tag '{t}'"),
+                    (Some(q), None) => format!("\"{q}\""),
+                    (None, Some(t)) => format!("tag '{t}'"),
+                    (None, None) => "(empty)".to_string(),
+                };
+                println!("No matches found for {label}.");
             } else {
                 for (idx, hit) in hits.iter().enumerate() {
                     let proj = hit.project_name.as_deref().unwrap_or("-");
@@ -570,6 +595,19 @@ fn main() -> Result<()> {
                 return print_json(&obj);
             }
             println!("Untagged '{}' ({}) of: {}", obj.title, obj.id, tags.join(", "));
+        }
+        Commands::Tags { project, limit } => {
+            let items = store.list_tags(project.as_deref(), limit)?;
+            if json {
+                return print_json(&items);
+            }
+            if items.is_empty() {
+                println!("No tags recorded.");
+            } else {
+                for item in items {
+                    println!("  {:<20} ({})", item.tag, item.object_count);
+                }
+            }
         }
         Commands::Context {
             project,

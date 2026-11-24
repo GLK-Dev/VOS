@@ -15,5 +15,5 @@ pub use models::{
     ProjectOwnership, ProjectResume, ProjectSnapshot, ProjectStart, ProjectStatus, ProjectSummary,
     QueryIntent, RecoveryDifficulty, RecoveryPrediction, RelatedHit, RelationType, RiskLevel,
     SearchBenchmarkCase, SearchBenchmarkCaseResult, SearchBenchmarkReport, SearchHit, SearchSignal,
-    SearchVisibility, SessionStats, SnapshotDiff, WorkSession,
+    SearchVisibility, SessionStats, SnapshotDiff, TagSummary, WorkSession,
 };
