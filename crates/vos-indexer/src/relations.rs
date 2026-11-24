@@ -114,7 +114,11 @@ pub(crate) fn extract_refs(path: &Path, kind: ObjectKind, text: &str) -> Vec<Raw
         extract_markdown_links(text, &mut refs);
     }
 
-    extract_path_mentions(text, kind, &mut refs);
+    let allow_backslash = matches!(kind, ObjectKind::Note | ObjectKind::Config)
+        || path.extension().and_then(|e| e.to_str()).is_some_and(|ext| {
+            matches!(ext.to_ascii_lowercase().as_str(), "ps1" | "bat" | "cmd")
+        });
+    extract_path_mentions(text, kind, allow_backslash, &mut refs);
     refs
 }
 
@@ -473,7 +477,12 @@ fn clean_md_target(raw: &str) -> Option<String> {
     Some(target.to_string())
 }
 
-fn extract_path_mentions(text: &str, kind: ObjectKind, out: &mut Vec<RawRef>) {
+fn extract_path_mentions(
+    text: &str,
+    kind: ObjectKind,
+    allow_backslash: bool,
+    out: &mut Vec<RawRef>,
+) {
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -499,10 +508,15 @@ fn extract_path_mentions(text: &str, kind: ObjectKind, out: &mut Vec<RawRef>) {
             if token.is_empty() || token.contains("://") {
                 continue;
             }
-            if token.contains('/') && looks_like_file_path(token) {
-                out.push(RawRef::PathRef {
-                    raw: token.to_string(),
-                });
+            if (token.contains('/') || (allow_backslash && token.contains('\\')))
+                && looks_like_file_path(token)
+            {
+                let norm_raw = if allow_backslash {
+                    token.replace('\\', "/")
+                } else {
+                    token.to_string()
+                };
+                out.push(RawRef::PathRef { raw: norm_raw });
             } else if matches!(kind, ObjectKind::Note | ObjectKind::Config)
                 && looks_like_filename_only(token)
             {
@@ -528,10 +542,10 @@ fn clean_candidate_token(raw: &str) -> &str {
 }
 
 fn looks_like_file_path(token: &str) -> bool {
-    if token.starts_with('/') && !token.contains('.') {
+    if (token.starts_with('/') || token.starts_with('\\')) && !token.contains('.') {
         return false;
     }
-    let Some(last) = token.rsplit('/').next() else {
+    let Some(last) = token.rsplit(['/', '\\']).next() else {
         return false;
     };
     looks_like_filename_only(last)
@@ -843,5 +857,14 @@ use super::util;
         let edges = resolve_relations(&scanned, &active, &HashMap::new());
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].relation_type, RelationType::MdLink);
+    }
+
+    #[test]
+    fn extracts_windows_backslash_paths_from_notes_and_powershell_scripts() {
+        let ps1 = "pwsh -NoProfile -File scripts\\run_v112_sprint.ps1\n";
+        let ps1_refs = extract_refs(Path::new("scripts/test_all.ps1"), ObjectKind::Code, ps1);
+        assert!(ps1_refs.contains(&RawRef::PathRef {
+            raw: "scripts/run_v112_sprint.ps1".to_string(),
+        }));
     }
 }

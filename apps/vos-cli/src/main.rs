@@ -77,12 +77,29 @@ enum Commands {
     Show {
         /// Object ID, path, or unique title.
         target: String,
+        /// Optional project name to disambiguate shared filenames.
+        #[arg(long)]
+        project: Option<String>,
     },
     /// Attach manual tags to an object.
     Tag {
         /// Object ID, path, or unique title.
         target: String,
+        /// Optional project name to disambiguate shared filenames.
+        #[arg(long)]
+        project: Option<String>,
         /// One or more tags to attach.
+        #[arg(required = true)]
+        tags: Vec<String>,
+    },
+    /// Remove manual tags from an object.
+    Untag {
+        /// Object ID, path, or unique title.
+        target: String,
+        /// Optional project name to disambiguate shared filenames.
+        #[arg(long)]
+        project: Option<String>,
+        /// One or more tags to remove.
         #[arg(required = true)]
         tags: Vec<String>,
     },
@@ -498,8 +515,8 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Show { target } => {
-            let details = store.show_object(&target)?;
+        Commands::Show { target, project } => {
+            let details = store.show_object_scoped(&target, project.as_deref())?;
             if json {
                 return print_json(&details);
             }
@@ -532,12 +549,27 @@ fn main() -> Result<()> {
                 println!("\nSummary:\n{summary}");
             }
         }
-        Commands::Tag { target, tags } => {
-            let obj = store.add_tags(&target, &tags)?;
+        Commands::Tag {
+            target,
+            project,
+            tags,
+        } => {
+            let obj = store.add_tags_scoped(&target, project.as_deref(), &tags)?;
             if json {
                 return print_json(&obj);
             }
             println!("Tagged '{}' ({}) with: {}", obj.title, obj.id, tags.join(", "));
+        }
+        Commands::Untag {
+            target,
+            project,
+            tags,
+        } => {
+            let obj = store.remove_tags_scoped(&target, project.as_deref(), &tags)?;
+            if json {
+                return print_json(&obj);
+            }
+            println!("Untagged '{}' ({}) of: {}", obj.title, obj.id, tags.join(", "));
         }
         Commands::Context {
             project,

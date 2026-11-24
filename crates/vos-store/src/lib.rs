@@ -268,13 +268,23 @@ impl Store {
 
     /// Attaches manual tags to an object identified by ID or path and records a `tagged` event.
     pub fn add_tags(&mut self, id_or_path: &str, tags: &[String]) -> Result<ObjectRecord, StoreError> {
+        self.add_tags_scoped(id_or_path, None, tags)
+    }
+
+    /// Attaches manual tags to an object, optionally scoped by `project_name` to disambiguate shared titles.
+    pub fn add_tags_scoped(
+        &mut self,
+        id_or_path: &str,
+        project_name: Option<&str>,
+        tags: &[String],
+    ) -> Result<ObjectRecord, StoreError> {
         if tags.is_empty() {
             return Err(StoreError::InvalidInput(
                 "at least one tag must be provided".to_string(),
             ));
         }
 
-        let details = self.show_object(id_or_path)?;
+        let details = self.show_object_scoped(id_or_path, project_name)?;
         let now = now_unix();
         let tx = self.conn.transaction()?;
         let mut added_tags = Vec::new();
@@ -307,6 +317,35 @@ impl Store {
             batch::touch_project(&tx, details.object.project_id.as_deref(), now)?;
         }
 
+        tx.commit()?;
+        Ok(details.object)
+    }
+
+    /// Removes manual tags from an object, optionally scoped by `project_name`.
+    pub fn remove_tags_scoped(
+        &mut self,
+        id_or_path: &str,
+        project_name: Option<&str>,
+        tags: &[String],
+    ) -> Result<ObjectRecord, StoreError> {
+        if tags.is_empty() {
+            return Err(StoreError::InvalidInput(
+                "at least one tag must be provided".to_string(),
+            ));
+        }
+
+        let details = self.show_object_scoped(id_or_path, project_name)?;
+        let tx = self.conn.transaction()?;
+        for raw_tag in tags {
+            let normalized = raw_tag.trim().to_lowercase();
+            if normalized.is_empty() {
+                continue;
+            }
+            tx.execute(
+                "DELETE FROM tags WHERE object_id = ?1 AND tag = ?2 AND source = 'manual'",
+                params![details.object.id, normalized],
+            )?;
+        }
         tx.commit()?;
         Ok(details.object)
     }

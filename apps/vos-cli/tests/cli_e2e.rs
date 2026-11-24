@@ -600,3 +600,31 @@ fn cli_session_stop_auto_reindexes_disk_edits_unless_no_index_is_set() {
     let val_no_idx: serde_json::Value = serde_json::from_str(&stop_no_idx).expect("stop no-index json");
     assert_eq!(val_no_idx["files_changed_count"], 0);
 }
+
+#[test]
+fn cli_show_tag_and_untag_disambiguate_with_project_flag() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let p1 = tmp.path().join("repo1");
+    let p2 = tmp.path().join("repo2");
+    fs::create_dir_all(p1.join("src")).unwrap();
+    fs::create_dir_all(p2.join("src")).unwrap();
+    fs::write(p1.join("src/lib.rs"), "pub fn one() {}\n").unwrap();
+    fs::write(p2.join("src/lib.rs"), "pub fn two() {}\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "repo1", p1.to_str().unwrap()]);
+    assert_vos_ok(&db, &["project", "create", "repo2", p2.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", "--all"]);
+
+    assert_vos_ok(&db, &["tag", "lib.rs", "--project", "repo1", "core", "api"]);
+    let shown = assert_vos_ok(&db, &["show", "lib.rs", "--project", "repo1", "--json"]);
+    let shown_val: serde_json::Value = serde_json::from_str(&shown).expect("show json");
+    assert_eq!(shown_val["project_name"], "repo1");
+    assert_eq!(shown_val["tags"].as_array().unwrap().len(), 2);
+
+    assert_vos_ok(&db, &["untag", "lib.rs", "--project", "repo1", "api"]);
+    let after_untag = assert_vos_ok(&db, &["show", "lib.rs", "--project", "repo1", "--json"]);
+    let after_val: serde_json::Value = serde_json::from_str(&after_untag).expect("show json after untag");
+    assert_eq!(after_val["tags"].as_array().unwrap().len(), 1);
+    assert_eq!(after_val["tags"][0][0], "core");
+}
