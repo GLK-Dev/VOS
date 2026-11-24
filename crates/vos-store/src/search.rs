@@ -22,6 +22,8 @@ const ALL_TERMS_MATCH_BOOST: f64 = 12.0;
 const PHRASE_MATCH_BOOST: f64 = 8.0;
 /// Base bonus for architectural/specification documents under concept queries.
 const CONCEPT_DOC_BASE_BOOST: f64 = 8.0;
+/// Score bonus per matching tag when query terms match attached object tags.
+const TAG_MATCH_BOOST: f64 = 18.0;
 /// Bonus when an expanded concept synonym from `config/concepts.yaml` matches.
 const CONCEPT_SYNONYM_BOOST: f64 = 12.0;
 /// Additional score per extra matching chunk in the same file (capped).
@@ -69,9 +71,47 @@ struct SearchCandidate {
     matched_object_fts: bool,
     matched_stage1_and: bool,
     matched_concept_expansion: bool,
+    matched_tags: Vec<String>,
     best_chunk_bm25: Option<f64>,
     object_bm25: Option<f64>,
     observed_text_lower: String,
+}
+
+impl SearchCandidate {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        object_id: String,
+        project_name: Option<String>,
+        title: String,
+        path: String,
+        kind: ObjectKind,
+        is_noise: bool,
+        snippet: String,
+        intent: QueryIntent,
+    ) -> Self {
+        Self {
+            hit: SearchHit {
+                object_id,
+                project_name,
+                title,
+                path,
+                kind,
+                is_noise,
+                snippet,
+                score: 0.0,
+                intent,
+                signals: Vec::new(),
+            },
+            chunk_hits: 0,
+            matched_object_fts: false,
+            matched_stage1_and: false,
+            matched_concept_expansion: false,
+            matched_tags: Vec::new(),
+            best_chunk_bm25: None,
+            object_bm25: None,
+            observed_text_lower: String::new(),
+        }
+    }
 }
 
 impl Store {
@@ -207,6 +247,18 @@ impl Store {
                 &mut merged,
             )?;
         }
+
+        // Stage 4: direct matches on attached object tags (even when absent from text/filename).
+        self.collect_tag_matches(
+            &query_terms,
+            &phrase_lower,
+            project_name,
+            clean_tag.as_deref(),
+            kind_str,
+            pool_limit,
+            intent,
+            &mut merged,
+        )?;
 
         let mut hits: Vec<SearchHit> = merged
             .into_values()
@@ -362,26 +414,17 @@ impl Store {
             for row in rows {
                 let (id, pname, title, path, kind, is_noise, snippet, bm25_rank, chunk_text) = row?;
                 let is_new = !merged.contains_key(&id);
-                let entry = merged.entry(id.clone()).or_insert_with(|| SearchCandidate {
-                    hit: SearchHit {
-                        object_id: id,
-                        project_name: pname,
+                let entry = merged.entry(id.clone()).or_insert_with(|| {
+                    SearchCandidate::new(
+                        id,
+                        pname,
                         title,
                         path,
                         kind,
                         is_noise,
-                        snippet: snippet.clone(),
-                        score: 0.0,
+                        snippet.clone(),
                         intent,
-                        signals: Vec::new(),
-                    },
-                    chunk_hits: 0,
-                    matched_object_fts: false,
-                    matched_stage1_and: is_stage1,
-                    matched_concept_expansion: is_concept,
-                    best_chunk_bm25: None,
-                    object_bm25: None,
-                    observed_text_lower: String::new(),
+                    )
                 });
 
                 if is_stage1 {
@@ -449,26 +492,17 @@ impl Store {
 
             for row in rows {
                 let (id, pname, title, path, kind, is_noise, snippet, bm25_rank, summary) = row?;
-                let entry = merged.entry(id.clone()).or_insert_with(|| SearchCandidate {
-                    hit: SearchHit {
-                        object_id: id,
-                        project_name: pname,
+                let entry = merged.entry(id.clone()).or_insert_with(|| {
+                    SearchCandidate::new(
+                        id,
+                        pname,
                         title,
                         path,
                         kind,
                         is_noise,
-                        snippet: snippet.clone(),
-                        score: 0.0,
+                        snippet.clone(),
                         intent,
-                        signals: Vec::new(),
-                    },
-                    chunk_hits: 0,
-                    matched_object_fts: false,
-                    matched_stage1_and: is_stage1,
-                    matched_concept_expansion: is_concept,
-                    best_chunk_bm25: None,
-                    object_bm25: None,
-                    observed_text_lower: String::new(),
+                    )
                 });
                 if is_stage1 {
                     entry.matched_stage1_and = true;
@@ -494,6 +528,80 @@ impl Store {
             }
         }
 
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collect_tag_matches(
+        &self,
+        query_terms: &[String],
+        phrase_lower: &str,
+        project_name: Option<&str>,
+        tag_filter: Option<&str>,
+        kind_filter: Option<&str>,
+        pool_limit: i64,
+        intent: QueryIntent,
+        merged: &mut HashMap<String, SearchCandidate>,
+    ) -> Result<(), StoreError> {
+        let mut lookup_tags: Vec<String> = Vec::new();
+        for term in query_terms {
+            let clean = term
+                .trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+                .to_lowercase();
+            if !clean.is_empty() && !lookup_tags.contains(&clean) {
+                lookup_tags.push(clean);
+            }
+        }
+        if query_terms.len() > 1 && !phrase_lower.is_empty() && !lookup_tags.contains(&phrase_lower.to_string()) {
+            lookup_tags.push(phrase_lower.to_string());
+        }
+        if lookup_tags.is_empty() {
+            return Ok(());
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT o.id, p.name, o.title, o.path, o.kind, o.is_noise, COALESCE(o.summary, '')
+             FROM tags t
+             JOIN objects o ON o.id = t.object_id
+             LEFT JOIN projects p ON p.id = o.project_id
+             WHERE o.is_deleted = 0
+               AND t.tag = ?1
+               AND (?2 IS NULL OR p.name = ?2)
+               AND (?3 IS NULL OR EXISTS (
+                   SELECT 1 FROM tags tf WHERE tf.object_id = o.id AND tf.tag = ?3
+               ))
+               AND (?4 IS NULL OR o.kind = ?4)
+             ORDER BY o.is_noise ASC, o.modified_at DESC
+             LIMIT ?5",
+        )?;
+
+        for tag in lookup_tags {
+            let rows = stmt.query_map(
+                params![tag, project_name, tag_filter, kind_filter, pool_limit],
+                |row| {
+                    let kind_str: String = row.get(4)?;
+                    let is_noise: i64 = row.get(5)?;
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        ObjectKind::from_db(&kind_str),
+                        is_noise != 0,
+                        row.get::<_, String>(6)?,
+                    ))
+                },
+            )?;
+            for row in rows {
+                let (id, pname, title, path, kind, is_noise, summary) = row?;
+                let entry = merged.entry(id.clone()).or_insert_with(|| {
+                    SearchCandidate::new(id, pname, title, path, kind, is_noise, summary, intent)
+                });
+                if !entry.matched_tags.contains(&tag) {
+                    entry.matched_tags.push(tag.clone());
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -532,6 +640,13 @@ fn score_search_candidate(
         });
     }
 
+    if !cand.matched_tags.is_empty() {
+        signals.push(SearchSignal {
+            label: format!("tag match ({})", cand.matched_tags.join(", ")),
+            delta: (cand.matched_tags.len() as f64) * TAG_MATCH_BOOST,
+        });
+    }
+
     if cand.chunk_hits > 1 {
         let extra = ((cand.chunk_hits - 1) as f64 * MULTI_CHUNK_STEP_BOOST)
             .min(MULTI_CHUNK_MAX_BOOST);
@@ -566,6 +681,7 @@ fn score_search_candidate(
         if title_lower.contains(term)
             || path_lower.contains(term)
             || cand.observed_text_lower.contains(term)
+            || cand.matched_tags.iter().any(|t| t == term)
         {
             matched_terms.insert(term.as_str());
         }
@@ -902,5 +1018,49 @@ mod tests {
             .unwrap();
         assert_eq!(code_query.len(), 1);
         assert_eq!(code_query[0].title, "scheduler.rs");
+    }
+
+    #[test]
+    fn search_surfaces_and_boosts_matching_manual_tags() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("tagboost", None, None).unwrap();
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(crate::UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/worker.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "worker.rs".to_string(),
+                summary: Some("Background retry handler".to_string()),
+                content_hash: "h1".to_string(),
+                size_bytes: 80,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec!["pub fn retry_job() {}".to_string()],
+            })
+            .unwrap();
+        batch
+            .upsert_object(crate::UpsertObjectInput {
+                project_id: Some(proj.id),
+                path: "/repo/notes.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "notes.md".to_string(),
+                summary: Some("Billing notes".to_string()),
+                content_hash: "h2".to_string(),
+                size_bytes: 60,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec!["Billing notes overview.".to_string()],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        // `worker.rs` has no textual occurrence of "billing", yet tag match surfaces it cleanly.
+        store
+            .add_tags_scoped("worker.rs", Some("tagboost"), &["billing".into()])
+            .unwrap();
+        let hits = store.search("billing", Some("tagboost"), 5).unwrap();
+        let worker_hit = hits.iter().find(|h| h.title == "worker.rs").expect("tagged object found");
+        assert!(worker_hit.signals.iter().any(|s| s.label == "tag match (billing)"));
     }
 }
