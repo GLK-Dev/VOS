@@ -15,7 +15,7 @@ See [SPEC.md](SPEC.md) for the canonical specification and [AGENTS.md](AGENTS.md
 - 10 real projects indexed
 - 778 active files
 - 20/20 recovery scenarios passed
-- 34/34 tests passing
+- 35/35 tests passing
 - 0 clippy warnings
 
 ### Search Benchmark

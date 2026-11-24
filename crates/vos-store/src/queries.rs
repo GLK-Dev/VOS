@@ -20,14 +20,45 @@ impl Store {
         id_or_path: &str,
         project_name: Option<&str>,
     ) -> Result<ObjectDetails, StoreError> {
-        let mut object = self.find_object_by_id_or_path(id_or_path)?;
+        let scoped_project = match project_name {
+            Some(name) => Some(
+                self.get_project_by_name(name)?
+                    .ok_or_else(|| StoreError::NotFound("project", name.to_string()))?,
+            ),
+            None => None,
+        };
+        let matches_scope = |obj: &ObjectRecord| match &scoped_project {
+            Some(proj) => obj.project_id.as_deref() == Some(proj.id.as_str()),
+            None => true,
+        };
+
+        let mut object = self
+            .find_object_by_id_or_path(id_or_path)?
+            .filter(&matches_scope);
+
         if object.is_none() {
             let candidate = Path::new(id_or_path);
-            if candidate.exists() {
+            if let Some(ref proj) = scoped_project {
+                if candidate.is_absolute() && candidate.exists() {
+                    let canonical = canonicalize_path(candidate)?;
+                    object = self
+                        .find_object_by_id_or_path(&canonical)?
+                        .filter(&matches_scope);
+                } else if let Some(ref root) = proj.root_path {
+                    let joined = Path::new(root).join(candidate);
+                    if joined.exists() {
+                        let canonical = canonicalize_path(&joined)?;
+                        object = self
+                            .find_object_by_id_or_path(&canonical)?
+                            .filter(&matches_scope);
+                    }
+                }
+            } else if candidate.exists() {
                 let canonical = canonicalize_path(candidate)?;
                 object = self.find_object_by_id_or_path(&canonical)?;
             }
         }
+
         if object.is_none() {
             object = self.find_object_by_title_or_suffix(id_or_path, project_name)?;
         }
@@ -523,5 +554,48 @@ mod tests {
 
         let ctx_all = store.project_context("demo", 10, true).unwrap();
         assert_eq!(ctx_all.recent_objects.len(), 3);
+    }
+
+    #[test]
+    fn scoped_lookup_resolves_target_within_requested_project_not_cwd() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj_a = store.create_project("proj_a", None, None).unwrap();
+        let proj_b = store.create_project("proj_b", None, None).unwrap();
+
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj_a.id.clone()),
+                path: "/fake/a/README.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "README.md".to_string(),
+                summary: Some("A".to_string()),
+                content_hash: "ha".to_string(),
+                size_bytes: 1,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec!["A".to_string()],
+            })
+            .unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj_b.id.clone()),
+                path: "/fake/b/README.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "README.md".to_string(),
+                summary: Some("B".to_string()),
+                content_hash: "hb".to_string(),
+                size_bytes: 1,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec!["B".to_string()],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        // Even though `README.md` exists in the repo CWD, `--project proj_b` must resolve `proj_b`'s file.
+        let details = store.show_object_scoped("README.md", Some("proj_b")).unwrap();
+        assert_eq!(details.project_name.as_deref(), Some("proj_b"));
+        assert_eq!(details.object.path, "/fake/b/README.md");
     }
 }

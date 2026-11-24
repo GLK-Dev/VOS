@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use rusqlite::params;
 use vos_core::util::now_unix;
 use vos_core::{
-    AreaCoverage, AreaOwnership, AreaRisk, CoverageTier, GraphDirection, ObjectKind, ObjectRecord, ProjectCoverage,
+    AreaCoverage, AreaOwnership, AreaRisk, CoverageTier, GraphDirection, ObjectKind, ObjectRecord, ProjectCoverage, ProjectGraph,
     ProjectOwnership, RelationType, RiskLevel,
 };
 
@@ -293,6 +293,14 @@ impl Store {
 
 /// Computes combined Graph + Ownership + Coverage + TODO structural risks across project areas.
     pub fn analyze_area_risks(&self, project_name: &str) -> Result<Vec<AreaRisk>, StoreError> {
+        let (_, _, _, risks) = self.compute_insight_bundle(project_name)?;
+        Ok(risks)
+    }
+
+    pub(crate) fn compute_insight_bundle(
+        &self,
+        project_name: &str,
+    ) -> Result<(ProjectOwnership, ProjectCoverage, ProjectGraph, Vec<AreaRisk>), StoreError> {
         let ownership = self.project_ownership(project_name, 14, 200)?;
         let coverage = self.project_coverage(project_name)?;
         let graph = self.project_graph(project_name, None, GraphDirection::Both, 1, 500)?;
@@ -327,15 +335,15 @@ impl Store {
 
         let recent_by_area: HashMap<String, usize> = ownership
             .most_active_areas
-            .into_iter()
-            .map(|a| (a.area, a.recent_modified_count))
+            .iter()
+            .map(|a| (a.area.clone(), a.recent_modified_count))
             .collect();
 
         let mut risks = Vec::new();
         for cov in coverage
             .underdocumented
-            .into_iter()
-            .chain(coverage.partially_covered)
+            .iter()
+            .chain(coverage.partially_covered.iter())
         {
             let relation_count = rel_count_by_area.get(&cov.area).copied().unwrap_or(0);
             let recent_activity = recent_by_area.get(&cov.area).copied().unwrap_or(0);
@@ -376,7 +384,7 @@ impl Store {
 
             let top_hub = top_hub_by_area.get(&cov.area).cloned();
             risks.push(AreaRisk {
-                area: cov.area,
+                area: cov.area.clone(),
                 level,
                 risk_score,
                 relation_count,
@@ -398,7 +406,7 @@ impl Store {
                 .then_with(|| a.area.cmp(&b.area))
         });
 
-        Ok(risks)
+        Ok((ownership, coverage, graph, risks))
     }
 
     fn count_open_todos_by_area(

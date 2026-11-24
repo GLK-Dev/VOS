@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::params;
 use vos_core::util::now_unix;
 use vos_core::{
-    ChangedSinceReport, ConceptExplanation, DocumentationHealth, GraphDirection, ObjectKind, ObjectRecord, ProjectHealth, ProjectStatus, RiskLevel,
+    ChangedSinceReport, ConceptExplanation, DocumentationHealth, ObjectKind, ObjectRecord, ProjectHealth, ProjectStatus, RiskLevel,
 };
 
 use crate::concepts::ConceptDictionary;
@@ -59,9 +59,7 @@ impl Store {
             resume.last_activity_at,
         )?;
 
-        let coverage = self.project_coverage(project_name)?;
-        let ownership = self.project_ownership(project_name, 14, 5)?;
-        let graph = self.project_graph(project_name, None, GraphDirection::Both, 1, 5)?;
+        let (ownership, coverage, graph, area_risks) = self.compute_insight_bundle(project_name)?;
 
         let documentation_health = if resume.active_objects == 0
             || (coverage.doc_files == 0 && coverage.code_files == 0)
@@ -127,8 +125,6 @@ impl Store {
                 }
             }
         }
-
-        let area_risks = self.analyze_area_risks(project_name)?;
         let critical_risk_count = area_risks
             .iter()
             .filter(|r| r.level == RiskLevel::Critical)
