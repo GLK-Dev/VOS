@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::params;
 use vos_core::util::now_unix;
 use vos_core::{
-    ChangedSinceReport, ConceptExplanation, DocumentationHealth, GraphDirection, ObjectKind, ObjectRecord, ProjectHealth, ProjectStatus,
+    ChangedSinceReport, ConceptExplanation, DocumentationHealth, GraphDirection, ObjectKind, ObjectRecord, ProjectHealth, ProjectStatus, RiskLevel,
 };
 
 use crate::concepts::ConceptDictionary;
@@ -128,6 +128,31 @@ impl Store {
             }
         }
 
+        let area_risks = self.analyze_area_risks(project_name)?;
+        let critical_risk_count = area_risks
+            .iter()
+            .filter(|r| r.level == RiskLevel::Critical)
+            .count();
+        let high_risk_count = area_risks
+            .iter()
+            .filter(|r| r.level == RiskLevel::High)
+            .count();
+        let critical_areas: Vec<_> = area_risks
+            .into_iter()
+            .filter(|r| r.level == RiskLevel::Critical)
+            .take(5)
+            .collect();
+
+        for crit in critical_areas.iter().take(2) {
+            let entry = format!(
+                "{} — Critical Risk ({} relations, {} TODOs, 0 docs/refs)",
+                crit.area, crit.relation_count, crit.open_todos
+            );
+            if !risk_areas.contains(&entry) {
+                risk_areas.insert(0, entry);
+            }
+        }
+
         Ok(ProjectStatus {
             project: resume.project,
             health,
@@ -140,6 +165,9 @@ impl Store {
             active_areas: resume.most_active_areas,
             coverage_ratio: coverage.coverage_ratio,
             documentation_health,
+            critical_risk_count,
+            high_risk_count,
+            critical_areas,
             dependency_hubs,
             risk_areas,
         })

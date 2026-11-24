@@ -331,11 +331,46 @@ fn cli_continue_status_and_drift_surface_insight_layer_signals() {
     assert!(cont_out.contains("Dependency hubs"));
 
     let status_out = assert_vos_ok(&db, &["status", "hubrepo"]);
-    assert!(status_out.contains("Knowledge coverage:"));
+    assert!(status_out.contains("Critical Risks:"));
     assert!(status_out.contains("Documentation Health:"));
     assert!(status_out.contains("high activity + low coverage"));
 
     let drift_out = assert_vos_ok(&db, &["drift", "hubrepo"]);
     assert!(drift_out.contains("[structural risk drift]"));
     assert!(drift_out.contains("src/engine"));
+}
+
+#[test]
+fn cli_promotes_high_risk_hub_with_open_todos_to_critical_risk() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("critrepo");
+    fs::create_dir_all(proj.join("src/compute")).unwrap();
+
+    fs::write(proj.join("README.md"), "# CritRepo\nOverview.\n").unwrap();
+    fs::write(
+        proj.join("src/compute/mod.rs"),
+        "// TODO: stabilize batching API\npub mod a;\npub mod b;\npub mod c;\npub mod d;\npub mod e;\npub mod f;\n",
+    )
+    .unwrap();
+    for ch in ['a', 'b', 'c', 'd', 'e', 'f'] {
+        fs::write(
+            proj.join(format!("src/compute/{ch}.rs")),
+            format!("// FIXME: check bounds in {ch}\npub fn fn_{ch}() {{}}\n"),
+        )
+        .unwrap();
+    }
+
+    assert_vos_ok(&db, &["project", "create", "critrepo", proj.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "critrepo"]);
+
+    let status_out = assert_vos_ok(&db, &["status", "critrepo"]);
+    assert!(status_out.contains("Critical Risks: 1"));
+    assert!(status_out.contains("Critical Areas:"));
+    assert!(status_out.contains("src/compute"));
+    assert!(status_out.contains("TODOs:"));
+
+    let drift_out = assert_vos_ok(&db, &["drift", "critrepo"]);
+    assert!(drift_out.contains("[critical risk]"));
+    assert!(drift_out.contains("Critical Risk"));
 }

@@ -650,6 +650,10 @@ fn main() -> Result<()> {
             let root_prefix = st.project.root_path.as_deref().unwrap_or("");
             println!("Project: {} ({} active, {} deleted)", st.project.name, st.active_objects, st.deleted_objects);
             println!("\nHealth: {}", st.health);
+            println!("Critical Risks: {}", st.critical_risk_count);
+            println!("High Risks: {}", st.high_risk_count);
+            println!("Coverage: {:.1}%", st.coverage_ratio);
+            println!("Documentation Health: {}", st.documentation_health);
 
             println!("\nLast change:");
             match st.last_change_at {
@@ -693,9 +697,17 @@ fn main() -> Result<()> {
                 }
             }
 
-            println!("\nKnowledge coverage:");
-            println!("  Coverage Ratio: {:.1}%", st.coverage_ratio);
-            println!("  Documentation Health: {}", st.documentation_health);
+            if !st.critical_areas.is_empty() {
+                println!("\nCritical Areas:");
+                for (idx, crit) in st.critical_areas.iter().enumerate() {
+                    println!("  {}. {}", idx + 1, crit.area);
+                    println!(
+                        "     Relations: {} | Coverage: Low | TODOs: {}",
+                        crit.relation_count, crit.open_todos
+                    );
+                    println!("     Reason: {}", crit.reason);
+                }
+            }
 
             if !st.dependency_hubs.is_empty() {
                 println!("\nDependency hubs:");

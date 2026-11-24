@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use rusqlite::params;
 use vos_core::util::now_unix;
 use vos_core::{
-    AreaCoverage, AreaOwnership, CoverageTier, ObjectKind, ObjectRecord, ProjectCoverage,
-    ProjectOwnership, RelationType,
+    AreaCoverage, AreaOwnership, AreaRisk, CoverageTier, GraphDirection, ObjectKind, ObjectRecord, ProjectCoverage,
+    ProjectOwnership, RelationType, RiskLevel,
 };
 
 use crate::queries::map_object_row;
@@ -291,6 +291,212 @@ impl Store {
         })
     }
 
+/// Computes combined Graph + Ownership + Coverage + TODO structural risks across project areas.
+    pub fn analyze_area_risks(&self, project_name: &str) -> Result<Vec<AreaRisk>, StoreError> {
+        let ownership = self.project_ownership(project_name, 14, 200)?;
+        let coverage = self.project_coverage(project_name)?;
+        let graph = self.project_graph(project_name, None, GraphDirection::Both, 1, 500)?;
+
+        let root_prefix = ownership.project.root_path.as_deref().unwrap_or("");
+        let trimmed_root = root_prefix.trim_end_matches(['/', '\\']);
+        let objects = self.load_active_non_noise_objects(&ownership.project.id)?;
+        let todos_by_area = self.count_open_todos_by_area(&ownership.project.id, root_prefix, &objects)?;
+
+        let mut rel_count_by_area: HashMap<String, usize> = HashMap::new();
+        let mut top_hub_by_area: HashMap<String, String> = HashMap::new();
+        for hub in &graph.hubs {
+            let area = object_area(&hub.object.path, root_prefix);
+            let deg = hub.outgoing_count + hub.incoming_count;
+            if deg == 0 {
+                continue;
+            }
+            *rel_count_by_area.entry(area.clone()).or_insert(0) += deg;
+            top_hub_by_area.entry(area).or_insert_with(|| {
+                let rel_path = if !trimmed_root.is_empty() {
+                    hub.object
+                        .path
+                        .strip_prefix(trimmed_root)
+                        .map(|r| r.trim_start_matches(['/', '\\']))
+                        .unwrap_or(&hub.object.path)
+                } else {
+                    &hub.object.path
+                };
+                format!("{rel_path} ({deg} relations)")
+            });
+        }
+
+        let recent_by_area: HashMap<String, usize> = ownership
+            .most_active_areas
+            .into_iter()
+            .map(|a| (a.area, a.recent_modified_count))
+            .collect();
+
+        let mut risks = Vec::new();
+        for cov in coverage
+            .underdocumented
+            .into_iter()
+            .chain(coverage.partially_covered)
+        {
+            let relation_count = rel_count_by_area.get(&cov.area).copied().unwrap_or(0);
+            let recent_activity = recent_by_area.get(&cov.area).copied().unwrap_or(0);
+            let open_todos = todos_by_area.get(&cov.area).copied().unwrap_or(0);
+
+            if relation_count == 0 && recent_activity == 0 {
+                continue;
+            }
+
+            let risk_score = (relation_count as f64) * 2.0
+                + (recent_activity as f64)
+                - cov.weighted_score;
+            let is_high_base = risk_score >= 15.0;
+            let is_low_cov = cov.tier == CoverageTier::Underdocumented;
+
+            let level = if is_high_base && is_low_cov && open_todos > 0 {
+                RiskLevel::Critical
+            } else if is_high_base {
+                RiskLevel::High
+            } else if risk_score >= 6.0 {
+                RiskLevel::Medium
+            } else {
+                RiskLevel::Low
+            };
+
+            let reason = match level {
+                RiskLevel::Critical => {
+                    "High dependency hub with low coverage and active unfinished work".to_string()
+                }
+                RiskLevel::High => {
+                    "High dependency hub with insufficient documentation".to_string()
+                }
+                RiskLevel::Medium => {
+                    "Moderate dependency hub needing documentation".to_string()
+                }
+                RiskLevel::Low => "Low structural risk".to_string(),
+            };
+
+            let top_hub = top_hub_by_area.get(&cov.area).cloned();
+            risks.push(AreaRisk {
+                area: cov.area,
+                level,
+                risk_score,
+                relation_count,
+                recent_activity,
+                coverage_tier: cov.tier,
+                coverage_score: cov.weighted_score,
+                code_files: cov.code_files,
+                open_todos,
+                top_hub,
+                reason,
+            });
+        }
+
+        risks.sort_by(|a, b| {
+            b.level
+                .cmp(&a.level)
+                .then_with(|| b.risk_score.total_cmp(&a.risk_score))
+                .then_with(|| b.open_todos.cmp(&a.open_todos))
+                .then_with(|| a.area.cmp(&b.area))
+        });
+
+        Ok(risks)
+    }
+
+    fn count_open_todos_by_area(
+        &self,
+        project_id: &str,
+        root_prefix: &str,
+        objects: &[ObjectRecord],
+    ) -> Result<HashMap<String, usize>, StoreError> {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+
+        // 1. Code chunks containing explicit TODO/FIXME/OPEN QUESTION markers.
+        let mut stmt = self.conn.prepare(
+            "SELECT o.path, c.text
+             FROM chunks c
+             JOIN objects o ON o.id = c.object_id
+             WHERE o.project_id = ?1
+               AND o.is_deleted = 0
+               AND o.is_noise = 0
+               AND o.kind = 'code'
+               AND (
+                   c.text LIKE '%TODO%'
+                   OR c.text LIKE '%FIXME%'
+                   OR c.text LIKE '%OPEN QUESTION%'
+               )",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        for (path, text) in rows {
+            let area = object_area(&path, root_prefix);
+            let mut hit_lines = 0_usize;
+            for line in text.lines() {
+                if line_has_unfinished_marker(line) {
+                    hit_lines += 1;
+                }
+            }
+            if hit_lines > 0 {
+                *counts.entry(area).or_insert(0) += hit_lines;
+            }
+        }
+
+        // 2. Unchecked tasks / open questions in docs referencing an area or its specific files.
+        let (open_questions, pending_work) = self.scan_project_markers(project_id)?;
+        if !open_questions.is_empty() || !pending_work.is_empty() {
+            let mut stems_by_area: HashMap<String, Vec<String>> = HashMap::new();
+            for obj in objects {
+                if obj.kind != ObjectKind::Code {
+                    continue;
+                }
+                let area = object_area(&obj.path, root_prefix);
+                if area == "(root)" {
+                    continue;
+                }
+                let entry = stems_by_area.entry(area.clone()).or_default();
+                let area_lower = area.to_ascii_lowercase();
+                if !entry.contains(&area_lower) {
+                    entry.push(area_lower);
+                }
+                let title_lower = obj.title.to_ascii_lowercase();
+                if !matches!(
+                    title_lower.as_str(),
+                    "mod.rs" | "lib.rs" | "main.rs" | "index.ts" | "index.js"
+                ) && !entry.contains(&title_lower)
+                {
+                    entry.push(title_lower);
+                }
+                if let Some(stem) = std::path::Path::new(&obj.title)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                {
+                    let stem_lower = stem.to_ascii_lowercase();
+                    if stem_lower.len() >= 4
+                        && !matches!(
+                            stem_lower.as_str(),
+                            "mod" | "lib" | "main" | "index" | "test" | "tests" | "util" | "utils" | "error" | "models"
+                        )
+                        && !entry.contains(&stem_lower)
+                    {
+                        entry.push(stem_lower);
+                    }
+                }
+            }
+
+            for marker in pending_work.iter().chain(open_questions.iter()) {
+                let marker_lower = marker.to_ascii_lowercase();
+                for (area, terms) in &stems_by_area {
+                    if terms.iter().any(|t| marker_lower.contains(t.as_str())) {
+                        *counts.entry(area.clone()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+
+        Ok(counts)
+    }
     fn load_active_non_noise_objects(&self, project_id: &str) -> Result<Vec<ObjectRecord>, StoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, project_id, path, kind, title, summary, content_hash,
@@ -305,6 +511,19 @@ impl Store {
     }
 }
 
+fn line_has_unfinished_marker(raw_line: &str) -> bool {
+    let lower = raw_line.trim().to_ascii_lowercase();
+    lower.contains("// todo")
+        || lower.contains("// fixme")
+        || lower.contains("# todo")
+        || lower.contains("# fixme")
+        || lower.contains("/* todo")
+        || lower.contains("/* fixme")
+        || lower.starts_with("todo:")
+        || lower.starts_with("fixme:")
+        || lower.starts_with("open question:")
+        || lower.contains("todo!(")
+}
 #[cfg(test)]
 mod tests {
     use vos_core::util::now_unix;
@@ -464,5 +683,54 @@ mod tests {
 
         let drift = store.project_drift("fusion").unwrap();
         assert!(drift.findings.iter().any(|f| f.kind == "structural risk drift" && f.summary.contains("src/core")));
+    }
+
+    #[test]
+    fn high_risk_underdocumented_hub_with_todos_becomes_critical_risk() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("crit", None, None).unwrap();
+        let now = now_unix();
+
+        let mut mod_input = obj_input(&proj.id, "src/compute/mod.rs", ObjectKind::Code, now - 60);
+        mod_input.chunks = vec!["// TODO: finish SIMD dispatch\npub mod a;".to_string()];
+
+        let mut batch = store.begin_index_batch().unwrap();
+        let id_hub = batch
+            .upsert_object(mod_input)
+            .unwrap()
+            .object_id()
+            .to_string();
+
+        let mut rels = Vec::new();
+        for name in ["a", "b", "c", "d", "e", "f", "g"] {
+            let child_id = batch
+                .upsert_object(obj_input(
+                    &proj.id,
+                    &format!("src/compute/{name}.rs"),
+                    ObjectKind::Code,
+                    now - 120,
+                ))
+                .unwrap()
+                .object_id()
+                .to_string();
+            rels.push(RelationInput {
+                from_object_id: id_hub.clone(),
+                to_object_id: child_id,
+                relation_type: RelationType::RustMod,
+                confidence: 1.0,
+                detail: Some(format!("mod {name}")),
+            });
+        }
+        batch.sync_relations(std::slice::from_ref(&id_hub), &rels).unwrap();
+        batch.commit().unwrap();
+
+        let status = store.project_status("crit").unwrap();
+        assert_eq!(status.critical_risk_count, 1);
+        assert_eq!(status.critical_areas[0].area, "src/compute");
+        assert_eq!(status.critical_areas[0].level, RiskLevel::Critical);
+        assert_eq!(status.critical_areas[0].open_todos, 1);
+
+        let drift = store.project_drift("crit").unwrap();
+        assert!(drift.findings.iter().any(|f| f.kind == "critical risk"));
     }
 }

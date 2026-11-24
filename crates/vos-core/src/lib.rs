@@ -6,7 +6,7 @@ pub mod util;
 
 pub use error::VosError;
 pub use models::{
-    ActiveArea, AreaCoverage, AreaOwnership, BenchmarkRunRecord, CategoryBenchmarkStats,
+    ActiveArea, AreaCoverage, AreaOwnership, AreaRisk, BenchmarkRunRecord, CategoryBenchmarkStats,
     ChangedSinceReport, ConceptExplanation, ContinueSuggestion, CoverageTier, DocumentationHealth,
     DriftFinding, EventRecord, EventType, GraphDirection, GraphEdge, GraphHub, GraphTreeNode,
     ObjectDetails, ObjectKind, ObjectRecord, ObjectWhy, Project, ProjectActivity, ProjectContinue,

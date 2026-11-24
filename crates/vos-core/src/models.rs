@@ -447,6 +447,9 @@ pub struct ProjectStatus {
     pub active_areas: Vec<ActiveArea>,
     pub coverage_ratio: f64,
     pub documentation_health: DocumentationHealth,
+    pub critical_risk_count: usize,
+    pub high_risk_count: usize,
+    pub critical_areas: Vec<AreaRisk>,
     pub dependency_hubs: Vec<String>,
     pub risk_areas: Vec<String>,
 }
@@ -719,22 +722,40 @@ impl fmt::Display for DocumentationHealth {
     }
 }
 
-/// Risk tier for deterministic structural drift scoring (`vos drift`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Risk tier for deterministic structural drift and status risk analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RiskLevel {
-    High,
-    Medium,
     Low,
+    Medium,
+    High,
+    Critical,
 }
 
 impl RiskLevel {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::Critical => "Critical Risk",
             Self::High => "High Risk",
             Self::Medium => "Medium Risk",
             Self::Low => "Low Risk",
         }
     }
+}
+
+/// Combined Graph + Ownership + Coverage + TODO structural risk assessment for a project area.
+#[derive(Debug, Clone)]
+pub struct AreaRisk {
+    pub area: String,
+    pub level: RiskLevel,
+    pub risk_score: f64,
+    pub relation_count: usize,
+    pub recent_activity: usize,
+    pub coverage_tier: CoverageTier,
+    pub coverage_score: f64,
+    pub code_files: usize,
+    pub open_todos: usize,
+    pub top_hub: Option<String>,
+    pub reason: String,
 }
 
 impl fmt::Display for RiskLevel {
