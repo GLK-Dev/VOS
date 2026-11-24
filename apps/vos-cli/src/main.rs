@@ -163,7 +163,8 @@ enum Commands {
     Drift {
         /// Project name.
         project: String,
-    },    /// Decision-support health, pending work, and risk summary for a project (or all projects with --all).
+    },
+    /// Decision-support health, pending work, and risk summary for a project (or all projects with --all).
     Status {
         /// Project name (required unless --all is specified).
         project: Option<String>,
@@ -185,7 +186,8 @@ enum Commands {
         since: String,
         /// Optional project name (positional).
         project: Option<String>,
-    },    /// Unified project kickoff view (resume + recent activity + open questions).
+    },
+    /// Unified project kickoff view (resume + recent activity + open questions).
     Start {
         /// Project name.
         project: String,
@@ -194,7 +196,8 @@ enum Commands {
     Continue {
         /// Project name.
         project: String,
-    },    /// Summarize where work stopped and suggest starting points to resume a project.
+    },
+    /// Summarize where work stopped and suggest starting points to resume a project.
     Resume {
         /// Project name.
         project: String,
@@ -253,8 +256,11 @@ enum Commands {
     },
     /// Capture a point-in-time snapshot of project status, coverage, and risks.
     Snapshot {
-        /// Project name.
-        project: String,
+        /// Project name (required unless --all is specified).
+        project: Option<String>,
+        /// Capture snapshots for all registered projects.
+        #[arg(long)]
+        all: bool,
         /// Optional human-readable snapshot label.
         #[arg(long)]
         label: Option<String>,
@@ -1718,7 +1724,47 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Snapshot { project, label } => {
+        Commands::Snapshot {
+            project,
+            all,
+            label,
+        } => {
+            if all && project.is_some() {
+                anyhow::bail!("pass either a project name or --all, not both");
+            }
+            if all {
+                let snaps = store.save_all_snapshots(label.as_deref())?;
+                if json {
+                    return print_json(&snaps);
+                }
+                if snaps.is_empty() {
+                    println!("No projects registered.");
+                } else {
+                    for s in &snaps {
+                        let lbl = s
+                            .label
+                            .as_deref()
+                            .map(|l| format!(" [{l}]"))
+                            .unwrap_or_default();
+                        println!(
+                            "#{:<3} | {:<12} | {} | files: {} | rels: {} | cov: {:.1}% | crit: {} high: {}{}",
+                            s.id,
+                            s.project_name,
+                            s.health,
+                            s.active_objects,
+                            s.relations_count,
+                            s.coverage_ratio,
+                            s.critical_risks,
+                            s.high_risks,
+                            lbl
+                        );
+                    }
+                    println!("Saved {} snapshot(s).", snaps.len());
+                }
+                return Ok(());
+            }
+            let project = project
+                .ok_or_else(|| anyhow::anyhow!("provide a project name or pass --all"))?;
             let snap = store.save_snapshot(&project, label.as_deref())?;
             if json {
                 return print_json(&snap);

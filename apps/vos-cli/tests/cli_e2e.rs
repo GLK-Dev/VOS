@@ -733,3 +733,38 @@ fn cli_since_supports_hours_weeks_today_and_yesterday() {
     let bad_out = run_vos(&db, &["changed-since", "-5d", "sinceproj"]);
     assert!(!bad_out.0);
 }
+
+#[test]
+fn cli_snapshot_all_captures_all_projects_and_rejects_conflicting_args() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+
+    let empty_all = assert_vos_ok(&db, &["snapshot", "--all"]);
+    assert!(empty_all.contains("No projects registered."));
+
+    let p_a = tmp.path().join("alpha");
+    let p_b = tmp.path().join("beta");
+    fs::create_dir_all(p_a.join("src")).unwrap();
+    fs::create_dir_all(p_b.join("src")).unwrap();
+    fs::write(p_a.join("README.md"), "# Alpha\n").unwrap();
+    fs::write(p_b.join("src").join("lib.rs"), "pub fn b() {}\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "alpha", p_a.to_str().unwrap()]);
+    assert_vos_ok(&db, &["project", "create", "beta", p_b.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", "--all"]);
+
+    let snap_json = assert_vos_ok(&db, &["snapshot", "--all", "--label", "pre-break", "--json"]);
+    let snaps: Vec<serde_json::Value> = serde_json::from_str(&snap_json).expect("snapshot all json");
+    assert_eq!(snaps.len(), 2);
+    assert_eq!(snaps[0]["project_name"], "alpha");
+    assert_eq!(snaps[1]["project_name"], "beta");
+    assert_eq!(snaps[0]["label"], "pre-break");
+    assert_eq!(snaps[1]["label"], "pre-break");
+
+    let listed = assert_vos_ok(&db, &["snapshots", "--json"]);
+    let listed_arr: Vec<serde_json::Value> = serde_json::from_str(&listed).expect("snapshots json");
+    assert_eq!(listed_arr.len(), 2);
+
+    assert!(!run_vos(&db, &["snapshot"]).0);
+    assert!(!run_vos(&db, &["snapshot", "--all", "alpha"]).0);
+}

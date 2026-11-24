@@ -112,6 +112,21 @@ impl Store {
         self.get_snapshot(id)
     }
 
+    /// Captures and persists point-in-time snapshots for all registered projects ordered by name.
+    pub fn save_all_snapshots(
+        &self,
+        label: Option<&str>,
+    ) -> Result<Vec<ProjectSnapshot>, StoreError> {
+        let mut projects = self.list_projects()?;
+        projects.sort_by(|a, b| a.project.name.cmp(&b.project.name));
+
+        let mut saved = Vec::with_capacity(projects.len());
+        for summary in projects {
+            saved.push(self.save_snapshot(&summary.project.name, label)?);
+        }
+        Ok(saved)
+    }
+
     /// Loads a single saved snapshot by numeric ID.
     pub fn get_snapshot(&self, id: i64) -> Result<ProjectSnapshot, StoreError> {
         self.conn
@@ -840,5 +855,22 @@ mod tests {
         assert_eq!(diff.active_delta, 1);
         assert_eq!(diff.added_pending_work.len(), 1);
         assert_eq!(store.list_snapshots(Some("livecmp"), 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn save_all_snapshots_captures_every_registered_project() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(store.save_all_snapshots(Some("empty")).unwrap().is_empty());
+
+        store.create_project("zebra", None, None).unwrap();
+        store.create_project("alpha", None, None).unwrap();
+
+        let snaps = store.save_all_snapshots(Some("portfolio-check")).unwrap();
+        assert_eq!(snaps.len(), 2);
+        assert_eq!(snaps[0].project_name, "alpha");
+        assert_eq!(snaps[1].project_name, "zebra");
+        assert_eq!(snaps[0].label.as_deref(), Some("portfolio-check"));
+        assert_eq!(snaps[1].label.as_deref(), Some("portfolio-check"));
+        assert_eq!(store.list_snapshots(None, 10).unwrap().len(), 2);
     }
 }

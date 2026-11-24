@@ -13,7 +13,7 @@ See [SPEC.md](SPEC.md) for the canonical v0.1 specification, [AGENTS.md](AGENTS.
 ### Validation Summary
 
 - `10` real projects indexed (`780+` active objects, `1690+` deterministic relations)
-- `62 / 62` workspace tests passing (`0` clippy warnings under `-D warnings`)
+- `64 / 64` workspace tests passing (`0` clippy warnings under `-D warnings`)
 - `30 / 30` live sprint recovery scenarios passing (`~110ms` median CLI latency)
 - `24 / 24` isolated multi-project session lifecycle checks passing (`active=0`)
 
@@ -62,6 +62,7 @@ vos why src/lib.rs --project my-app --experimental
 
 # Snapshots, Sessions & Scriptable JSON Output
 vos snapshot my-app --label before-break
+vos snapshot --all --label before-break
 vos compare-snapshot 1 2
 vos compare-snapshot --project my-app --live
 vos session start my-app --note "Resume task"
