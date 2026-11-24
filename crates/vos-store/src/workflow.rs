@@ -631,4 +631,115 @@ mod tests {
         assert_eq!(stats.completed_sessions, 1);
         assert_eq!(stats.avg_quality, Some(5.0));
     }
+
+    #[test]
+    fn aggregates_24_sessions_across_all_difficulty_tiers_and_return_points() {
+        let mut store = Store::open_in_memory().unwrap();
+        let now = now_unix();
+
+        // Create 3 representative projects spanning Easy, Medium, and Hard difficulty tiers.
+        let p_easy = store.create_project("tiny", None, None).unwrap();
+        let p_med = store.create_project("mid", None, None).unwrap();
+        let p_hard = store.create_project("complex", None, None).unwrap();
+
+        let mut batch = store.begin_index_batch().unwrap();
+        // tiny -> active, documented -> Easy
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(p_easy.id.clone()),
+                path: "README.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "README.md".to_string(),
+                summary: Some("Tiny".to_string()),
+                content_hash: "te".to_string(),
+                size_bytes: 10,
+                modified_at: now - 60,
+                is_noise: false,
+                chunks: vec!["# Tiny".to_string()],
+            })
+            .unwrap();
+
+        // mid -> warm (20d) + 25 code files + Low coverage -> Medium (2 + 2 + 1 = 5)
+        for i in 0..25 {
+            batch
+                .upsert_object(UpsertObjectInput {
+                    project_id: Some(p_med.id.clone()),
+                    path: format!("src/m_{i}.rs"),
+                    kind: ObjectKind::Code,
+                    title: format!("m_{i}.rs"),
+                    summary: Some("Mid".to_string()),
+                    content_hash: format!("tm_{i}"),
+                    size_bytes: 10,
+                    modified_at: now - 20 * 86_400,
+                    is_noise: false,
+                    chunks: vec!["pub fn mid() {}".to_string()],
+                })
+                .unwrap();
+        }
+
+        // complex -> dormant (90d) + open questions -> Hard
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(p_hard.id.clone()),
+                path: "docs/SPEC.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "SPEC.md".to_string(),
+                summary: Some("Spec".to_string()),
+                content_hash: "th1".to_string(),
+                size_bytes: 10,
+                modified_at: now - 90 * 86_400,
+                is_noise: false,
+                chunks: vec![
+                    "OPEN QUESTION: Q1?\nOPEN QUESTION: Q2?\nOPEN QUESTION: Q3?\nOPEN QUESTION: Q4?"
+                        .to_string(),
+                ],
+            })
+            .unwrap();
+        for i in 0..25 {
+            batch
+                .upsert_object(UpsertObjectInput {
+                    project_id: Some(p_hard.id.clone()),
+                    path: format!("src/mod_{i}.rs"),
+                    kind: ObjectKind::Code,
+                    title: format!("mod_{i}.rs"),
+                    summary: Some("Code".to_string()),
+                    content_hash: format!("thc_{i}"),
+                    size_bytes: 20,
+                    modified_at: now - 90 * 86_400,
+                    is_noise: false,
+                    chunks: vec!["pub fn x() {}".to_string()],
+                })
+                .unwrap();
+        }
+        batch.commit().unwrap();
+
+        // Record 24 sessions (8 per tier) cleanly.
+        for _ in 0..8 {
+            let s1 = store.start_session("tiny", Some("easy check")).unwrap();
+            assert_eq!(s1.predicted_difficulty, RecoveryDifficulty::Easy);
+            store.stop_session(Some("tiny"), Some(5), Some("fast")).unwrap();
+
+            let s2 = store.start_session("mid", Some("med check")).unwrap();
+            assert_eq!(s2.predicted_difficulty, RecoveryDifficulty::Medium);
+            store.stop_session(Some("mid"), Some(4), Some("ok")).unwrap();
+
+            let s3 = store.start_session("complex", Some("hard check")).unwrap();
+            assert_eq!(s3.predicted_difficulty, RecoveryDifficulty::Hard);
+            store.stop_session(Some("complex"), Some(2), Some("heavy")).unwrap();
+        }
+
+        let stats = store.session_stats(None).unwrap();
+        assert_eq!(stats.total_sessions, 24);
+        assert_eq!(stats.completed_sessions, 24);
+        assert_eq!(stats.active_sessions, 0);
+        assert_eq!(stats.by_predicted_difficulty.len(), 3);
+        assert_eq!(stats.by_predicted_difficulty[0].difficulty, RecoveryDifficulty::Easy);
+        assert_eq!(stats.by_predicted_difficulty[0].sessions, 8);
+        assert_eq!(stats.by_predicted_difficulty[0].avg_quality, Some(5.0));
+        assert_eq!(stats.by_predicted_difficulty[1].difficulty, RecoveryDifficulty::Medium);
+        assert_eq!(stats.by_predicted_difficulty[1].avg_quality, Some(4.0));
+        assert_eq!(stats.by_predicted_difficulty[2].difficulty, RecoveryDifficulty::Hard);
+        assert_eq!(stats.by_predicted_difficulty[2].avg_quality, Some(2.0));
+        assert!(!stats.frequent_return_points.is_empty());
+    }
 }
