@@ -254,10 +254,9 @@ impl Store {
                     o.size_bytes, o.modified_at, o.indexed_at, o.is_deleted, o.deleted_at, o.is_noise
              FROM objects o
              LEFT JOIN projects p ON p.id = o.project_id
-             WHERE o.title = ?1
+             WHERE LOWER(o.title) = LOWER(?1)
                AND o.is_deleted = 0
-               AND (?2 IS NULL OR p.name = ?2)
-             LIMIT 5",
+               AND (?2 IS NULL OR p.name = ?2)",
         )?;
         let mut matches = stmt
             .query_map(params![target, project_name], map_object_row)?
@@ -267,6 +266,11 @@ impl Store {
             return Ok(matches.pop());
         }
         if matches.len() > 1 {
+            let exact: Vec<ObjectRecord> =
+                matches.iter().filter(|m| m.title == target).cloned().collect();
+            if exact.len() == 1 {
+                return Ok(exact.into_iter().next());
+            }
             return Err(ambiguous_object_error(target, matches));
         }
 
@@ -663,5 +667,64 @@ mod tests {
 
         let scoped = store.show_object_scoped(".\\src\\lib.rs", Some("beta")).unwrap();
         assert_eq!(scoped.object.path, "/ws/beta/src/lib.rs");
+    }
+
+    #[test]
+    fn title_lookup_reports_full_overflow_count_and_prefers_exact_case() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("many", None, None).unwrap();
+
+        let mut batch = store.begin_index_batch().unwrap();
+        for idx in 0..7 {
+            batch
+                .upsert_object(UpsertObjectInput {
+                    project_id: Some(proj.id.clone()),
+                    path: format!("/many/c{idx}/lib.rs"),
+                    kind: ObjectKind::Code,
+                    title: "lib.rs".to_string(),
+                    summary: None,
+                    content_hash: format!("h{idx}"),
+                    size_bytes: 10,
+                    modified_at: 100,
+                    is_noise: false,
+                    chunks: Vec::new(),
+                })
+                .unwrap();
+        }
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/many/docs/Notes.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "Notes.md".to_string(),
+                summary: None,
+                content_hash: "hn1".to_string(),
+                size_bytes: 10,
+                modified_at: 100,
+                is_noise: false,
+                chunks: Vec::new(),
+            })
+            .unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id),
+                path: "/many/lower/notes.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "notes.md".to_string(),
+                summary: None,
+                content_hash: "hn2".to_string(),
+                size_bytes: 10,
+                modified_at: 100,
+                is_noise: false,
+                chunks: Vec::new(),
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        let err = store.show_object("lib.rs").unwrap_err().to_string();
+        assert!(err.contains("(+2 more)"), "unexpected error: {err}");
+
+        let exact = store.show_object("Notes.md").unwrap();
+        assert_eq!(exact.object.path, "/many/docs/Notes.md");
     }
 }
