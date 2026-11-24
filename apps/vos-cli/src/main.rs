@@ -853,13 +853,8 @@ fn main() -> Result<()> {
                 }
             }
 
-            if let Some(pred) = prediction {
-                println!("\nExperimental Insights:");
-                println!("  Recovery Difficulty: {} (score: {})", pred.difficulty, pred.score);
-                println!("  Factors:");
-                for factor in &pred.factors {
-                    println!("    + {factor}");
-                }
+            if let Some(ref pred) = prediction {
+                print_recovery_prediction(pred);
             }
         }
         Commands::Explain { concept, project } => {
@@ -961,8 +956,17 @@ fn main() -> Result<()> {
             }
         }        Commands::Continue { project } => {
             let cont = store.project_continue(&project)?;
+            let prediction = if experimental {
+                let st = store.project_status(&project)?;
+                Some(store.predict_recovery_difficulty(&st))
+            } else {
+                None
+            };
             if json {
-                return print_json(&cont);
+                return print_json(&JsonContinueWithExperimental {
+                    cont: &cont,
+                    recovery_prediction: prediction,
+                });
             }
             let res = &cont.resume;
             let root_prefix = res.project.root_path.as_deref().unwrap_or("");
@@ -972,6 +976,10 @@ fn main() -> Result<()> {
             match res.last_activity_at {
                 Some(ts) => println!("  {} ({})", format_relative(ts), format_day(ts)),
                 None => println!("  never"),
+            }
+
+            if let Some(ref sess) = cont.last_session {
+                print_last_session(sess);
             }
 
             println!("\nContinue from:");
@@ -1052,7 +1060,12 @@ fn main() -> Result<()> {
                     println!("  - {q}");
                 }
             }
-        }        Commands::Start { project } => {
+
+            if let Some(ref pred) = prediction {
+                print_recovery_prediction(pred);
+            }
+        }
+        Commands::Start { project } => {
             let start = store.project_start(&project)?;
             if json {
                 return print_json(&start);
@@ -2123,4 +2136,71 @@ struct JsonBenchmarkSaveResult<'a> {
     report: &'a vos_core::SearchBenchmarkReport,
     #[serde(skip_serializing_if = "Option::is_none")]
     saved_run_id: Option<i64>,
+}
+
+#[derive(serde::Serialize)]
+struct JsonContinueWithExperimental<'a> {
+    #[serde(flatten)]
+    cont: &'a vos_core::ProjectContinue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_prediction: Option<vos_core::RecoveryPrediction>,
+}
+
+fn print_recovery_prediction(pred: &vos_core::RecoveryPrediction) {
+    println!("\nExperimental Insights:");
+    println!(
+        "  Recovery Difficulty: {} (score: {})",
+        pred.difficulty, pred.score
+    );
+    println!("  Factors:");
+    for factor in &pred.factors {
+        println!("    + {factor}");
+    }
+}
+
+fn print_last_session(sess: &vos_core::WorkSession) {
+    println!("\nLast work session:");
+    if let Some(ended) = sess.ended_at {
+        let dur = sess.duration_secs.unwrap_or(0);
+        println!(
+            "  Ended {} ({}) | Duration: {} | Files touched: {}",
+            format_relative(ended),
+            format_day(ended),
+            format_duration(dur),
+            sess.files_changed_count
+        );
+    } else {
+        println!(
+            "  Active since {} ({}) | Predicted: {} (score: {})",
+            format_relative(sess.started_at),
+            format_day(sess.started_at),
+            sess.predicted_difficulty,
+            sess.predicted_score
+        );
+    }
+    if let Some(ref rp) = sess.return_point {
+        println!("  Return point: {rp}");
+    }
+    if let Some(q) = sess.recovery_quality {
+        println!("  Quality: {q}/5");
+    }
+    if !sess.productive_areas.is_empty() {
+        println!("  Productive areas: {}", sess.productive_areas.join(", "));
+    }
+    if let Some(ref note) = sess.stop_note {
+        println!("  Note: {note}");
+    } else if let Some(ref note) = sess.start_note {
+        println!("  Start note: {note}");
+    }
+}
+
+fn format_duration(secs: i64) -> String {
+    let s = secs.max(0);
+    if s < 60 {
+        format!("{s}s")
+    } else if s < 3600 {
+        format!("{}m {}s", s / 60, s % 60)
+    } else {
+        format!("{}h {}m", s / 3600, (s % 3600) / 60)
+    }
 }

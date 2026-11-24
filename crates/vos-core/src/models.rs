@@ -304,8 +304,8 @@ pub struct ProjectContinue {
     pub ownership_areas: Vec<AreaOwnership>,
     pub coverage_warnings: Vec<AreaCoverage>,
     pub dependency_hubs: Vec<GraphHub>,
+    pub last_session: Option<WorkSession>,
 }
-/// Combined daily-launch briefing returned by os start <project>.
 /// Combined daily-launch briefing returned by `vos start <project>`.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectStart {

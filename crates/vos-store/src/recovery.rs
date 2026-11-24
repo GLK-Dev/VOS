@@ -253,6 +253,7 @@ impl Store {
         }
 
         let coverage_warnings = coverage.underdocumented.into_iter().take(4).collect();
+        let last_session = self.list_sessions(Some(project_name), 1)?.into_iter().next();
 
         Ok(ProjectContinue {
             resume,
@@ -262,6 +263,7 @@ impl Store {
             ownership_areas: ownership.most_active_areas,
             coverage_warnings,
             dependency_hubs: graph.hubs,
+            last_session,
         })
     }
     /// Builds a unified project kickoff briefing combining resume, recent activity, and open markers.
@@ -1213,10 +1215,42 @@ mod tests {
             .unwrap();
         assert_eq!(related[0].title, "kv_cache.rs");
     }
+
+    #[test]
+    fn continue_surfaces_latest_work_session() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("contproj", None, None).unwrap();
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/README.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "README.md".to_string(),
+                summary: Some("Project readme".to_string()),
+                content_hash: "h_readme".to_string(),
+                size_bytes: 120,
+                modified_at: now_unix() - 60,
+                is_noise: false,
+                chunks: vec!["# ContProj".to_string()],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        let started = store.start_session("contproj", Some("check recovery")).unwrap();
+        assert!(started.ended_at.is_none());
+        let cont_active = store.project_continue("contproj").unwrap();
+        let active_sess = cont_active.last_session.expect("active session present");
+        assert!(active_sess.ended_at.is_none());
+        assert_eq!(active_sess.start_note.as_deref(), Some("check recovery"));
+
+        store
+            .stop_session(Some("contproj"), Some(5), Some("Next: wire continue tests"))
+            .unwrap();
+        let cont_done = store.project_continue("contproj").unwrap();
+        let done_sess = cont_done.last_session.expect("completed session present");
+        assert!(done_sess.ended_at.is_some());
+        assert_eq!(done_sess.recovery_quality, Some(5));
+        assert_eq!(done_sess.stop_note.as_deref(), Some("Next: wire continue tests"));
+    }
 }
-
-
-
-
-
-

@@ -505,4 +505,19 @@ fn cli_json_output_and_why_experimental_blast_radius_work_end_to_end() {
     let sess_json = assert_vos_ok(&db, &["session", "start", "jsonproj", "--json"]);
     let s_val: serde_json::Value = serde_json::from_str(&sess_json).expect("session json");
     assert_eq!(s_val["project_name"], "jsonproj");
+
+    assert_vos_ok(
+        &db,
+        &["session", "stop", "jsonproj", "--quality", "5", "--note", "Next: finalize CLI"],
+    );
+
+    let cont_base = assert_vos_ok(&db, &["continue", "jsonproj"]);
+    assert!(cont_base.contains("Last work session:"));
+    assert!(cont_base.contains("Next: finalize CLI"));
+    assert!(!cont_base.contains("Experimental Insights:"));
+
+    let cont_exp_json = assert_vos_ok(&db, &["continue", "jsonproj", "--experimental", "--json"]);
+    let cont_val: serde_json::Value = serde_json::from_str(&cont_exp_json).expect("continue json");
+    assert_eq!(cont_val["last_session"]["stop_note"], "Next: finalize CLI");
+    assert!(cont_val["recovery_prediction"]["difficulty"].is_string());
 }
