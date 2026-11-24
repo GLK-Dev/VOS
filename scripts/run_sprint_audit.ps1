@@ -1,36 +1,39 @@
 <#
 .SYNOPSIS
-Runs a v1.1.2 automated multi-project audit (continue, status, drift, graph, ownership, coverage, benchmark)
-across all projects in ~/.vos/vos.db and writes objective metrics & latencies to docs/sprint_trial_report.md.
+Runs a parallelized v1.1.2 automated multi-project audit across all projects in ~/.vos/vos.db
+and writes objective metrics & latencies to docs/sprint_trial_report.md.
 #>
 param(
-    [string]$OutFile = (Join-Path (Split-Path -Parent $PSScriptRoot) "docs\sprint_trial_report.md")
+    [string]$OutFile = (Join-Path (Split-Path -Parent $PSScriptRoot) "docs\sprint_trial_report.md"),
+    [string]$VosBin = "vos",
+    [int]$ThrottleLimit = 8
 )
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-$projLines = vos project list | Where-Object { $_ -match '^\S+\s+\(proj_' }
-$projects = foreach ($line in $projLines) {
-    if ($line -match '^([^\s]+)\s+\(proj_') { $matches[1] }
+$projLines = & $VosBin project list | Where-Object { $_ -match '^\S+\s+\(proj_' }
+$projects = @()
+for ($idx = 0; $idx -lt $projLines.Count; $idx++) {
+    if ($projLines[$idx] -match '^([^\s]+)\s+\(proj_') {
+        $projects += [pscustomobject]@{ Order = $idx; Name = $matches[1] }
+    }
 }
 
-$sb = [System.Text.StringBuilder]::new()
-[void]$sb.AppendLine("# VOS v1.1.2 Multi-Project Automated Sprint Audit")
-[void]$sb.AppendLine("")
-[void]$sb.AppendLine("> Generated automatically on $(Get-Date -Format 'yyyy-MM-dd HH:mm') against live ``~/.vos/vos.db``.")
-[void]$sb.AppendLine("> Measures machine latency and extracted Observation/Understanding/Decision signals across all indexed repositories.")
-[void]$sb.AppendLine("")
-[void]$sb.AppendLine("| Project | Active | Relations | Health | Doc Health | Coverage | Crit | High | Continue (ms) | Status (ms) | Drift (ms) | Graph (ms) | Own (ms) | Cov (ms) |")
-[void]$sb.AppendLine("| --- | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+$benchPath = Join-Path (Split-Path -Parent $PSScriptRoot) "tests\search_live.yaml"
 
-foreach ($p in $projects) {
-    $swC = [System.Diagnostics.Stopwatch]::StartNew(); $contOut = vos continue $p; $swC.Stop()
-    $swS = [System.Diagnostics.Stopwatch]::StartNew(); $statOut = vos status $p; $swS.Stop()
-    $swD = [System.Diagnostics.Stopwatch]::StartNew(); $driftOut = vos drift $p; $swD.Stop()
-    $swG = [System.Diagnostics.Stopwatch]::StartNew(); $graphOut = vos graph $p --limit 5; $swG.Stop()
-    $swO = [System.Diagnostics.Stopwatch]::StartNew(); $null = vos ownership $p; $swO.Stop()
-    $swCov = [System.Diagnostics.Stopwatch]::StartNew(); $null = vos coverage $p; $swCov.Stop()
+# Run read-only per-project audits in parallel across WAL-enabled SQLite
+$rows = $projects | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
+    $bin = $using:VosBin
+    $p = $_.Name
+    $order = $_.Order
+
+    $swC = [System.Diagnostics.Stopwatch]::StartNew(); $contOut = & $bin continue $p; $swC.Stop()
+    $swS = [System.Diagnostics.Stopwatch]::StartNew(); $statOut = & $bin status $p; $swS.Stop()
+    $swD = [System.Diagnostics.Stopwatch]::StartNew(); $null = & $bin drift $p; $swD.Stop()
+    $swG = [System.Diagnostics.Stopwatch]::StartNew(); $graphOut = & $bin graph $p --limit 5; $swG.Stop()
+    $swO = [System.Diagnostics.Stopwatch]::StartNew(); $null = & $bin ownership $p; $swO.Stop()
+    $swCov = [System.Diagnostics.Stopwatch]::StartNew(); $null = & $bin coverage $p; $swCov.Stop()
 
     $active = if (($contOut | Select-Object -First 1) -match '\((\d+)\s+active') { $matches[1] } else { "0" }
     $rels = if (($graphOut | Select-Object -First 1) -match '\((\d+)\s+relations') { $matches[1] } else { "0" }
@@ -40,10 +43,38 @@ foreach ($p in $projects) {
     $covPct = if (($statOut | Where-Object { $_ -match '^Coverage:\s+([0-9\.]+%)' } | Select-Object -First 1) -match '^Coverage:\s+([0-9\.]+%)') { $matches[1] } else { "0.0%" }
     $docHealth = if (($statOut | Where-Object { $_ -match '^Documentation Health:\s+(\S+)' } | Select-Object -First 1) -match '^Documentation Health:\s+(\S+)') { $matches[1] } else { "-" }
 
-    [void]$sb.AppendLine("| $p | $active | $rels | $health | $docHealth | $covPct | $crit | $high | $($swC.ElapsedMilliseconds) | $($swS.ElapsedMilliseconds) | $($swD.ElapsedMilliseconds) | $($swG.ElapsedMilliseconds) | $($swO.ElapsedMilliseconds) | $($swCov.ElapsedMilliseconds) |")
-}
+    [pscustomobject]@{
+        Order     = $order
+        Project   = $p
+        Active    = $active
+        Relations = $rels
+        Health    = $health
+        DocHealth = $docHealth
+        CovPct    = $covPct
+        Crit      = $crit
+        High      = $high
+        MsC       = $swC.ElapsedMilliseconds
+        MsS       = $swS.ElapsedMilliseconds
+        MsD       = $swD.ElapsedMilliseconds
+        MsG       = $swG.ElapsedMilliseconds
+        MsO       = $swO.ElapsedMilliseconds
+        MsCov     = $swCov.ElapsedMilliseconds
+    }
+} | Sort-Object Order
 
-$benchOut = vos benchmark search --config (Join-Path (Split-Path -Parent $PSScriptRoot) "tests\search_live.yaml")
+$benchOut = & $VosBin benchmark search --config $benchPath
+
+$sb = [System.Text.StringBuilder]::new()
+[void]$sb.AppendLine("# VOS v1.1.2 Multi-Project Automated Sprint Audit")
+[void]$sb.AppendLine("")
+[void]$sb.AppendLine("> Generated automatically on $(Get-Date -Format 'yyyy-MM-dd HH:mm') against live ``~/.vos/vos.db``.")
+[void]$sb.AppendLine("> Measures machine latency and extracted Observation/Understanding/Decision signals across all indexed repositories.")
+[void]$sb.AppendLine("")
+[void]$sb.AppendLine("| Project | Active | Relations | Health | Doc Health | Coverage | Crit | High | Continue (ms) | Status (ms) | Drift (ms) | Graph (ms) | Own (ms) | Cov (ms) |")
+[void]$sb.AppendLine("| --- | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+foreach ($r in $rows) {
+    [void]$sb.AppendLine("| $($r.Project) | $($r.Active) | $($r.Relations) | $($r.Health) | $($r.DocHealth) | $($r.CovPct) | $($r.Crit) | $($r.High) | $($r.MsC) | $($r.MsS) | $($r.MsD) | $($r.MsG) | $($r.MsO) | $($r.MsCov) |")
+}
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("## Live 50-Query Search Benchmark Snapshot")
 [void]$sb.AppendLine("")

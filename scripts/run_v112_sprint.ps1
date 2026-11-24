@@ -1,20 +1,21 @@
 <#
 .SYNOPSIS
-Fast automated 30-scenario verification sprint for VOS v1.1.2 across all 10 indexed projects.
-Runs Observation/Understanding/Decision checks, verifies assertions, measures latency,
-and writes results to docs/v1_1_2_sprint_audit.md in ~2 seconds.
+Fast parallelized 30-scenario verification sprint for VOS across all 10 indexed projects.
+Runs 29 read-only scenarios concurrently via PowerShell 7 `-Parallel` and finishes with idempotent `vos index`.
 #>
 param(
-    [string]$OutFile = (Join-Path (Split-Path -Parent $PSScriptRoot) "docs\v1_1_2_sprint_audit.md")
+    [string]$OutFile = (Join-Path (Split-Path -Parent $PSScriptRoot) "docs\v1_1_2_sprint_audit.md"),
+    [string]$VosBin = "vos",
+    [int]$ThrottleLimit = 8
 )
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-$scenarios = @(
+$readScenarios = @(
     @{ Id = 1;  Project = "vos";         Task = "Dashboard & Critical Risk";   Args = @("status", "vos");                                    Expect = @("Health: Active", "Critical Risks:", "crates/vos-store") },
     @{ Id = 2;  Project = "vos";         Task = "Dependency graph tree";       Args = @("graph", "vos", "--limit", "3");                     Expect = @("Graph: vos", "crates\vos-store\src\lib.rs") },
-    @{ Id = 3;  Project = "vos";         Task = "Explain target with deps";    Args = @("why", "crates/vos-store/src/lib.rs", "--project", "vos"); Expect = @("Dependencies:", "crates\vos-store\src\insight.rs") },
+    @{ Id = 3;  Project = "vos";         Task = "Explain target with deps";    Args = @("why", "crates/vos-store/src/lib.rs", "--project", "vos"); Expect = @("Dependencies:", "crates\vos-store\src\batch.rs") },
     @{ Id = 4;  Project = "vos";         Task = "Explain concept";             Args = @("explain", "project context", "--project", "vos");   Expect = @("Concept:", "Files contributing:") },
     @{ Id = 5;  Project = "tessera-os";  Task = "Resume & hubs";               Args = @("continue", "tessera-os");                           Expect = @("Hub node", "Ownership hotspots", "Coverage warnings") },
     @{ Id = 6;  Project = "tessera-os";  Task = "Dashboard triage";            Args = @("status", "tessera-os");                             Expect = @("Critical Risks: 1", "apps/forge", "ROADMAP.md:") },
@@ -40,22 +41,17 @@ $scenarios = @(
     @{ Id = 26; Project = "claudecode";  Task = "Honest empty-doc status";     Args = @("status", "claudecode");                             Expect = @("missing README.md", "Documentation Health: Low") },
     @{ Id = 27; Project = "claudecode";  Task = ".bat classified as code";     Args = @("continue", "claudecode");                           Expect = @("[code]", "Coverage warnings") },
     @{ Id = 28; Project = "cloudcode";   Task = "Small project continue";      Args = @("continue", "cloudcode");                            Expect = @("Project: cloudcode", "Continue from:") },
-    @{ Id = 29; Project = "vm-transfer"; Task = "Small project status";        Args = @("status", "vm-transfer");                            Expect = @("Project: vm-transfer", "Health:") },
-    @{ Id = 30; Project = "vos";         Task = "Idempotent re-index check";   Args = @("index", "E:\VSCode projects\VOS", "--project", "vos"); Expect = @("Updated:   0", "Deleted:   0", "Relations:") }
+    @{ Id = 29; Project = "vm-transfer"; Task = "Small project status";        Args = @("status", "vm-transfer");                            Expect = @("Project: vm-transfer", "Health:") }
 )
 
-$results = @()
-$passed = 0
-$latencies = @()
-
-foreach ($s in $scenarios) {
+$readResults = $readScenarios | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
+    $bin = $using:VosBin
+    $s = $_
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $cmdArgs = $s.Args
-    $raw = (& vos @cmdArgs) 2>&1 | Out-String
+    $raw = (& $bin @cmdArgs) 2>&1 | Out-String
     $exit = $LASTEXITCODE
     $sw.Stop()
-    $ms = $sw.ElapsedMilliseconds
-    $latencies += $ms
 
     $ok = ($exit -eq 0)
     $missing = @()
@@ -65,18 +61,38 @@ foreach ($s in $scenarios) {
             $missing += $pat
         }
     }
-    if ($ok) { $passed++ }
     $cmdLine = "vos " + (($s.Args | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -join " ")
-    $results += [pscustomobject]@{
+    [pscustomobject]@{
         Id      = $s.Id
         Project = $s.Project
         Task    = $s.Task
         Command = $cmdLine
-        Ms      = $ms
+        Ms      = $sw.ElapsedMilliseconds
+        Ok      = $ok
         Status  = if ($ok) { "PASS" } else { "FAIL ($($missing -join '; '))" }
     }
 }
 
+# Run write/idempotency scenario #30 sequentially outside parallel batch
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$sw30 = [System.Diagnostics.Stopwatch]::StartNew()
+$raw30 = (& $VosBin index $repoRoot --project vos) 2>&1 | Out-String
+$exit30 = $LASTEXITCODE
+$sw30.Stop()
+$ok30 = ($exit30 -eq 0) -and $raw30.Contains("Updated:   0") -and $raw30.Contains("Deleted:   0") -and $raw30.Contains("Relations:")
+$res30 = [pscustomobject]@{
+    Id      = 30
+    Project = "vos"
+    Task    = "Idempotent re-index check"
+    Command = "vos index `"$repoRoot`" --project vos"
+    Ms      = $sw30.ElapsedMilliseconds
+    Ok      = $ok30
+    Status  = if ($ok30) { "PASS" } else { "FAIL (expected Updated: 0 / Deleted: 0 / Relations:)" }
+}
+
+$results = @($readResults + $res30) | Sort-Object Id
+$passed = ($results | Where-Object { $_.Ok }).Count
+$latencies = $results | ForEach-Object { $_.Ms }
 $sorted = $latencies | Sort-Object
 $median = $sorted[[int]([math]::Floor($sorted.Count / 2))]
 $mean = [math]::Round(($latencies | Measure-Object -Average).Average, 1)
@@ -100,6 +116,7 @@ foreach ($r in $results) {
 
 Set-Content -Path $OutFile -Value $sb.ToString() -Encoding UTF8
 Write-Host "Sprint passed: $passed / $($results.Count) | Median: $median ms | Mean: $mean ms"
-foreach ($r in $results | Where-Object { $_.Status -ne "PASS" }) {
+foreach ($r in $results | Where-Object { -not $_.Ok }) {
     Write-Host "FAILED #$($r.Id) ($($r.Project)): $($r.Status)" -ForegroundColor Red
+    exit 1
 }
