@@ -267,14 +267,13 @@ impl Store {
             return Ok(matches.pop());
         }
         if matches.len() > 1 {
-            let paths: Vec<String> = matches.into_iter().map(|m| m.path).collect();
-            return Err(StoreError::InvalidInput(format!(
-                "ambiguous object '{target}', specify --project or path. Matches: {}",
-                paths.join(", ")
-            )));
+            return Err(ambiguous_object_error(target, matches));
         }
 
-        let norm_target = target.replace('\\', "/").trim_start_matches('/').to_lowercase();
+        let norm_target = normalize_lookup_suffix(target);
+        if norm_target.is_empty() {
+            return Ok(None);
+        }
         let mut all_stmt = self.conn.prepare(
             "SELECT o.id, o.project_id, o.path, o.kind, o.title, o.summary, o.content_hash,
                     o.size_bytes, o.modified_at, o.indexed_at, o.is_deleted, o.deleted_at, o.is_noise
@@ -293,12 +292,41 @@ impl Store {
             })
             .collect();
 
-        if suffix_matches.len() == 1 {
-            Ok(suffix_matches.into_iter().next())
-        } else {
-            Ok(None)
+        match suffix_matches.len() {
+            0 => Ok(None),
+            1 => Ok(suffix_matches.into_iter().next()),
+            _ => Err(ambiguous_object_error(target, suffix_matches)),
         }
     }
+}
+
+fn normalize_lookup_suffix(target: &str) -> String {
+    let mut s = target.replace('\\', "/").trim().to_lowercase();
+    loop {
+        if let Some(rest) = s.strip_prefix("./") {
+            s = rest.to_string();
+        } else if let Some(rest) = s.strip_prefix('/') {
+            s = rest.to_string();
+        } else {
+            break s;
+        }
+    }
+}
+
+fn ambiguous_object_error(target: &str, matches: Vec<ObjectRecord>) -> StoreError {
+    let mut paths: Vec<String> = matches.into_iter().map(|m| m.path).collect();
+    paths.sort();
+    let total = paths.len();
+    let preview: Vec<&str> = paths.iter().take(5).map(String::as_str).collect();
+    let extra = if total > 5 {
+        format!(" (+{} more)", total - 5)
+    } else {
+        String::new()
+    };
+    StoreError::InvalidInput(format!(
+        "ambiguous object '{target}', specify --project or path. Matches: {}{extra}",
+        preview.join(", ")
+    ))
 }
 
 pub(crate) fn map_project_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
@@ -597,5 +625,43 @@ mod tests {
         let details = store.show_object_scoped("README.md", Some("proj_b")).unwrap();
         assert_eq!(details.project_name.as_deref(), Some("proj_b"));
         assert_eq!(details.object.path, "/fake/b/README.md");
+    }
+
+    #[test]
+    fn suffix_lookup_strips_dot_slash_and_surfaces_ambiguity_error() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj_a = store.create_project("alpha", None, None).unwrap();
+        let proj_b = store.create_project("beta", None, None).unwrap();
+
+        let mut batch = store.begin_index_batch().unwrap();
+        for (pid, path, hash) in [
+            (proj_a.id, "/ws/alpha/src/lib.rs", "ha"),
+            (proj_b.id, "/ws/beta/src/lib.rs", "hb"),
+        ] {
+            batch
+                .upsert_object(UpsertObjectInput {
+                    project_id: Some(pid),
+                    path: path.to_string(),
+                    kind: ObjectKind::Code,
+                    title: "lib.rs".to_string(),
+                    summary: None,
+                    content_hash: hash.to_string(),
+                    size_bytes: 10,
+                    modified_at: 100,
+                    is_noise: false,
+                    chunks: Vec::new(),
+                })
+                .unwrap();
+        }
+        batch.commit().unwrap();
+
+        let err = store.show_object("./src/lib.rs").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("ambiguous object './src/lib.rs'"));
+        assert!(msg.contains("/ws/alpha/src/lib.rs"));
+        assert!(msg.contains("/ws/beta/src/lib.rs"));
+
+        let scoped = store.show_object_scoped(".\\src\\lib.rs", Some("beta")).unwrap();
+        assert_eq!(scoped.object.path, "/ws/beta/src/lib.rs");
     }
 }
