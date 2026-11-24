@@ -286,6 +286,7 @@ fn build_hub(
 
     let outgoing = if matches!(direction, GraphDirection::Outgoing | GraphDirection::Both) {
         let mut visited = HashSet::from([root.id.clone()]);
+        let mut expanded = HashSet::from([root.id.clone()]);
         expand_tree(
             &root.id,
             GraphDirection::Outgoing,
@@ -293,6 +294,7 @@ fn build_hub(
             objects_by_id,
             outgoing_adj,
             &mut visited,
+            &mut expanded,
         )
     } else {
         Vec::new()
@@ -300,6 +302,7 @@ fn build_hub(
 
     let incoming = if matches!(direction, GraphDirection::Incoming | GraphDirection::Both) {
         let mut visited = HashSet::from([root.id.clone()]);
+        let mut expanded = HashSet::from([root.id.clone()]);
         expand_tree(
             &root.id,
             GraphDirection::Incoming,
@@ -307,6 +310,7 @@ fn build_hub(
             objects_by_id,
             incoming_adj,
             &mut visited,
+            &mut expanded,
         )
     } else {
         Vec::new()
@@ -328,6 +332,7 @@ fn expand_tree(
     objects_by_id: &HashMap<String, ObjectRecord>,
     adj: &HashMap<String, Vec<StoredEdge>>,
     visited: &mut HashSet<String>,
+    expanded: &mut HashSet<String>,
 ) -> Vec<GraphTreeNode> {
     if remaining_depth == 0 {
         return Vec::new();
@@ -349,7 +354,7 @@ fn expand_tree(
         };
 
         let is_new = visited.insert(next_id.clone());
-        let children = if is_new && remaining_depth > 1 {
+        let children = if is_new && remaining_depth > 1 && expanded.insert(next_id.clone()) {
             expand_tree(
                 next_id,
                 direction,
@@ -357,6 +362,7 @@ fn expand_tree(
                 objects_by_id,
                 adj,
                 visited,
+                expanded,
             )
         } else {
             Vec::new()
@@ -497,5 +503,39 @@ mod tests {
             .unwrap();
         assert_eq!(after_del.len(), 1);
         assert_eq!(after_del[0].to_title, "layer.rs");
+    }
+
+    #[test]
+    fn expand_tree_does_not_reexpand_shared_diamond_subtrees() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("diamond", None, None).unwrap();
+        let mut batch = store.begin_index_batch().unwrap();
+        let id_root = batch.upsert_object(dummy_input(&proj.id, "/d/root.rs", ObjectKind::Code, "root.rs")).unwrap().object_id().to_string();
+        let id_b = batch.upsert_object(dummy_input(&proj.id, "/d/b.rs", ObjectKind::Code, "b.rs")).unwrap().object_id().to_string();
+        let id_c = batch.upsert_object(dummy_input(&proj.id, "/d/c.rs", ObjectKind::Code, "c.rs")).unwrap().object_id().to_string();
+        let id_shared = batch.upsert_object(dummy_input(&proj.id, "/d/shared.rs", ObjectKind::Code, "shared.rs")).unwrap().object_id().to_string();
+        let id_leaf = batch.upsert_object(dummy_input(&proj.id, "/d/leaf.rs", ObjectKind::Code, "leaf.rs")).unwrap().object_id().to_string();
+
+        batch
+            .sync_relations(
+                &[id_root.clone(), id_b.clone(), id_c.clone(), id_shared.clone(), id_leaf.clone()],
+                &[
+                    RelationInput { from_object_id: id_root.clone(), to_object_id: id_b.clone(), relation_type: RelationType::RustUse, confidence: 0.9, detail: None },
+                    RelationInput { from_object_id: id_root, to_object_id: id_c.clone(), relation_type: RelationType::RustUse, confidence: 0.9, detail: None },
+                    RelationInput { from_object_id: id_b, to_object_id: id_shared.clone(), relation_type: RelationType::RustUse, confidence: 0.9, detail: None },
+                    RelationInput { from_object_id: id_c, to_object_id: id_shared.clone(), relation_type: RelationType::RustUse, confidence: 0.9, detail: None },
+                    RelationInput { from_object_id: id_shared, to_object_id: id_leaf, relation_type: RelationType::RustUse, confidence: 0.9, detail: None },
+                ],
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let graph = store
+            .project_graph("diamond", Some("root.rs"), GraphDirection::Outgoing, 4, 5)
+            .unwrap();
+        let branches = &graph.hubs[0].outgoing;
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[0].children[0].children.len(), 1);
+        assert!(branches[1].children[0].children.is_empty());
     }
 }

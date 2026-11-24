@@ -195,6 +195,12 @@ pub(crate) fn resolve_relations(
             if to_id == src.object_id {
                 continue;
             }
+            // Suppress redundant PathRef when an explicit MdLink already connects the same objects.
+            if rel_type == RelationType::PathRef
+                && seen.contains(&(src.object_id.clone(), to_id.clone(), RelationType::MdLink))
+            {
+                continue;
+            }
             if seen.insert((src.object_id.clone(), to_id.clone(), rel_type)) {
                 edges.push(RelationInput {
                     from_object_id: src.object_id.clone(),
@@ -806,5 +812,36 @@ use super::util;
         assert!(edges.iter().any(|e| e.to_object_id == "obj_core_util" && e.relation_type == RelationType::RustUse));
         assert!(edges.iter().any(|e| e.to_object_id == "obj_store_lib" && e.relation_type == RelationType::RustUse));
         assert_eq!(edges.len(), 2);
+    }
+
+    #[test]
+    fn deduplicates_md_link_and_path_ref_for_same_pair() {
+        let md = "See [Main](apps/vos-cli/src/main.rs) and apps/vos-cli/src/main.rs.";
+        let scanned = vec![ScannedObjectRefs {
+            object_id: "obj_readme".to_string(),
+            project_id: Some("p1".to_string()),
+            path: "/ws/README.md".to_string(),
+            raw_refs: extract_refs(Path::new("/ws/README.md"), ObjectKind::Note, md),
+        }];
+        let active = vec![
+            ActiveObjectRef {
+                id: "obj_readme".to_string(),
+                path: "/ws/README.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "README.md".to_string(),
+                project_id: Some("p1".to_string()),
+            },
+            ActiveObjectRef {
+                id: "obj_main".to_string(),
+                path: "/ws/apps/vos-cli/src/main.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "main.rs".to_string(),
+                project_id: Some("p1".to_string()),
+            },
+        ];
+
+        let edges = resolve_relations(&scanned, &active, &HashMap::new());
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].relation_type, RelationType::MdLink);
     }
 }
