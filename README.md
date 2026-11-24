@@ -6,7 +6,7 @@ See [SPEC.md](SPEC.md) for the canonical specification and [AGENTS.md](AGENTS.md
 
 ## Project Status
 
-**Version:** VOS v1.2.0 (Insight + Snapshots & Session Tracking)
+**Version:** VOS 1.2.0-experimental
 
 **Status:** Validated & Frozen (`Critical Risk` + `status` dashboard + `drift` structural risk; `snapshot` and `session` deferred pending Recovery Benchmark data)
 
@@ -15,7 +15,7 @@ See [SPEC.md](SPEC.md) for the canonical specification and [AGENTS.md](AGENTS.md
 - 10 real projects indexed
 - 778 active files
 - 20/20 recovery scenarios passed
-- 35/35 tests passing
+- 40/40 tests passing
 - 0 clippy warnings
 
 ### Search Benchmark
