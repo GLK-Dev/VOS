@@ -1,13 +1,16 @@
 <#
 .SYNOPSIS
-Computes Median/Mean Recovery Time, Median Quality, Best/Worst Project, and First-Command stats
-from docs/recovery_benchmark.md without changing VOS Rust code.
+Computes Median/Mean Recovery Time, Median Quality, Predicted-vs-Actual correlation,
+False Alarm / Missed Difficulty counts, and Helpful/Ignored signal tallies from
+docs/recovery_benchmark.md (plus live `vos session stats`).
 #>
 param(
     [string]$LogPath = (Join-Path $PSScriptRoot "..\docs\recovery_benchmark.md")
 )
 
 $ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 if (-not (Test-Path $LogPath)) {
     throw "Log file not found: $LogPath"
 }
@@ -21,58 +24,110 @@ foreach ($line in Get-Content -Path $LogPath -Encoding UTF8) {
     $cols = $trim.Trim('|').Split('|') | ForEach-Object { $_.Trim() }
     if ($cols.Count -lt 6) { continue }
 
+    # Support both 10-column (v1.2 with Predicted/Helpful/Ignored) and legacy 7-column rows.
+    $isV12 = $cols.Count -ge 9
+    $timeCol = if ($isV12) { $cols[5] } else { $cols[4] }
+    $qualCol = if ($isV12) { $cols[6] } else { $cols[5] }
+
     $timeVal = 0.0
     $qualVal = 0.0
-    $timeClean = ($cols[4] -replace '[^0-9\.]', '')
-    $qualClean = ($cols[5] -replace '[^0-9\.]', '')
-    if ([double]::TryParse($timeClean, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$timeVal) -and [double]::TryParse($qualClean, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$qualVal)) {
+    $timeClean = ($timeCol -replace '[^0-9\.]', '')
+    $qualClean = ($qualCol -replace '[^0-9\.]', '')
+    if ([double]::TryParse($timeClean, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$timeVal) -and
+        [double]::TryParse($qualClean, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$qualVal)) {
         $rows += [pscustomobject]@{
             Date         = $cols[0]
             Project      = $cols[1]
             DaysAway     = $cols[2]
             FirstCommand = $cols[3].ToLowerInvariant()
+            Predicted    = if ($isV12) { $cols[4] } else { "Unknown" }
             TimeMin      = $timeVal
             Quality      = $qualVal
+            Helpful      = if ($isV12 -and $cols.Count -ge 8) { $cols[7] } else { "-" }
+            Ignored      = if ($isV12 -and $cols.Count -ge 9) { $cols[8] } else { "-" }
         }
     }
 }
 
 if ($rows.Count -eq 0) {
     Write-Host "No recovery sessions logged yet in $LogPath."
-    exit 0
-}
-
-function Get-Median([double[]]$values) {
-    $sorted = $values | Sort-Object
-    $n = $sorted.Count
-    if ($n % 2 -eq 1) { return $sorted[[int][Math]::Floor($n / 2)] }
-    return ($sorted[$n / 2 - 1] + $sorted[$n / 2]) / 2.0
-}
-
-$times = [double[]]($rows | ForEach-Object { $_.TimeMin })
-$quals = [double[]]($rows | ForEach-Object { $_.Quality })
-$meanTime = ($times | Measure-Object -Average).Average
-$medTime = Get-Median $times
-$medQual = Get-Median $quals
-
-$byProj = $rows | Group-Object Project | ForEach-Object {
-    [pscustomobject]@{
-        Project = $_.Name
-        Runs    = $_.Count
-        AvgTime = [math]::Round(($_.Group | Measure-Object TimeMin -Average).Average, 1)
-        AvgQual = [math]::Round(($_.Group | Measure-Object Quality -Average).Average, 2)
+} else {
+    function Get-Median([double[]]$values) {
+        $sorted = $values | Sort-Object
+        $n = $sorted.Count
+        if ($n % 2 -eq 1) { return $sorted[[int][Math]::Floor($n / 2)] }
+        return ($sorted[$n / 2 - 1] + $sorted[$n / 2]) / 2.0
     }
-} | Sort-Object AvgTime, @{ Expression = "AvgQual"; Descending = $true }
 
-Write-Host "Recovery Sprint Summary ($($rows.Count) sessions):"
-Write-Host ("  Median Recovery Time: {0:N1} min (Mean: {1:N1} min)" -f $medTime, $meanTime)
-Write-Host ("  Median Quality:       {0:N1} / 5" -f $medQual)
-Write-Host ("  Best Project:         {0} ({1} min avg, quality {2})" -f $byProj[0].Project, $byProj[0].AvgTime, $byProj[0].AvgQual)
-Write-Host ("  Worst Project:        {0} ({1} min avg, quality {2})" -f $byProj[-1].Project, $byProj[-1].AvgTime, $byProj[-1].AvgQual)
+    $times = [double[]]($rows | ForEach-Object { $_.TimeMin })
+    $quals = [double[]]($rows | ForEach-Object { $_.Quality })
+    $meanTime = ($times | Measure-Object -Average).Average
+    $medTime = Get-Median $times
+    $medQual = Get-Median $quals
 
-Write-Host "`nFirst Command Breakdown:"
-$rows | Group-Object FirstCommand | Sort-Object Count -Descending | ForEach-Object {
-    $share = [math]::Round(($_.Count / $rows.Count) * 100.0, 1)
-    Write-Host ("  {0,-12} : {1,2} ({2}%)" -f $_.Name, $_.Count, $share)
+    $byProj = $rows | Group-Object Project | ForEach-Object {
+        [pscustomobject]@{
+            Project = $_.Name
+            Runs    = $_.Count
+            AvgTime = [math]::Round(($_.Group | Measure-Object TimeMin -Average).Average, 1)
+            AvgQual = [math]::Round(($_.Group | Measure-Object Quality -Average).Average, 2)
+        }
+    } | Sort-Object AvgTime, @{ Expression = "AvgQual"; Descending = $true }
+
+    Write-Host "Recovery Sprint Summary ($($rows.Count) sessions):"
+    Write-Host ("  Median Recovery Time: {0:N1} min (Mean: {1:N1} min)" -f $medTime, $meanTime)
+    Write-Host ("  Median Quality:       {0:N1} / 5" -f $medQual)
+    Write-Host ("  Best Project:         {0} ({1} min avg, quality {2})" -f $byProj[0].Project, $byProj[0].AvgTime, $byProj[0].AvgQual)
+    Write-Host ("  Worst Project:        {0} ({1} min avg, quality {2})" -f $byProj[-1].Project, $byProj[-1].AvgTime, $byProj[-1].AvgQual)
+
+    Write-Host "`nFirst Command Breakdown:"
+    $rows | Group-Object FirstCommand | Sort-Object Count -Descending | ForEach-Object {
+        $share = [math]::Round(($_.Count / $rows.Count) * 100.0, 1)
+        Write-Host ("  {0,-12} : {1,2} ({2}%)" -f $_.Name, $_.Count, $share)
+    }
+
+    $predRows = $rows | Where-Object { $_.Predicted -in @("Easy", "Medium", "Hard") }
+    if ($predRows.Count -gt 0) {
+        Write-Host "`nPredicted vs Actual:"
+        foreach ($tier in @("Easy", "Medium", "Hard")) {
+            $bucket = $predRows | Where-Object { $_.Predicted -eq $tier }
+            if ($bucket.Count -gt 0) {
+                $avgT = [math]::Round(($bucket | Measure-Object TimeMin -Average).Average, 1)
+                $avgQ = [math]::Round(($bucket | Measure-Object Quality -Average).Average, 2)
+                Write-Host ("  {0,-6} : {1,2} sessions | avg time: {2} min | avg quality: {3}/5" -f $tier, $bucket.Count, $avgT, $avgQ)
+            }
+        }
+        $falseAlarms = ($predRows | Where-Object { $_.Predicted -eq "Hard" -and $_.Quality -ge 4 -and $_.TimeMin -le 5.0 }).Count
+        $missedDiff = ($predRows | Where-Object { $_.Predicted -eq "Easy" -and ($_.Quality -le 2 -or $_.TimeMin -ge 15.0) }).Count
+        Write-Host ("  False Alarms (Hard -> <=5m & Q>=4):   {0}" -f $falseAlarms)
+        Write-Host ("  Missed Difficulty (Easy -> >=15m/Q<=2): {0}" -f $missedDiff)
+    }
+
+    $helpfulCounts = @{}
+    $ignoredCounts = @{}
+    foreach ($r in $rows) {
+        foreach ($tok in ($r.Helpful -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -ne "-" })) {
+            $helpfulCounts[$tok] = ($helpfulCounts[$tok] ?? 0) + 1
+        }
+        foreach ($tok in ($r.Ignored -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -ne "-" })) {
+            $ignoredCounts[$tok] = ($ignoredCounts[$tok] ?? 0) + 1
+        }
+    }
+    if ($helpfulCounts.Count -gt 0 -or $ignoredCounts.Count -gt 0) {
+        Write-Host "`nSignal Usefulness Tally:"
+        foreach ($kv in ($helpfulCounts.GetEnumerator() | Sort-Object Value -Descending)) {
+            Write-Host ("  + Helpful : {0} ({1}x)" -f $kv.Key, $kv.Value)
+        }
+        foreach ($kv in ($ignoredCounts.GetEnumerator() | Sort-Object Value -Descending)) {
+            Write-Host ("  - Ignored : {0} ({1}x)" -f $kv.Key, $kv.Value)
+        }
+    }
 }
 
+if (Get-Command vos -ErrorAction SilentlyContinue) {
+    $sessStats = (vos session stats) 2>$null
+    if ($LASTEXITCODE -eq 0 -and $sessStats) {
+        Write-Host "`nSQLite Work Sessions Summary:"
+        $sessStats | ForEach-Object { Write-Host "  $_" }
+    }
+}
