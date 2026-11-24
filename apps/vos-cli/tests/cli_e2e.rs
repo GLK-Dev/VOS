@@ -705,3 +705,31 @@ fn cli_doctor_reports_healthy_index_and_missing_root_paths() {
     assert!(repair_out.contains("VOS Doctor: HEALTHY"));
     assert!(repair_out.contains("Repair applied:"));
 }
+
+#[test]
+fn cli_since_supports_hours_weeks_today_and_yesterday() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("sinceproj");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("src").join("lib.rs"), "pub fn tick() -> u32 { 1 }\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "sinceproj", proj.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "sinceproj"]);
+
+    for since_arg in ["12h", "2w", "today", "yesterday"] {
+        let cs_out = assert_vos_ok(&db, &["changed-since", since_arg, "sinceproj", "--json"]);
+        let cs_val: serde_json::Value = serde_json::from_str(&cs_out).expect("changed-since json");
+        assert_eq!(cs_val["since_label"], since_arg);
+        assert!(!cs_val["added"].as_array().unwrap().is_empty());
+
+        let evo_out = assert_vos_ok(&db, &["evolution", "sinceproj", "--since", since_arg, "--json"]);
+        let evo_val: serde_json::Value = serde_json::from_str(&evo_out).expect("evolution json");
+        assert_eq!(evo_val["project"]["name"], "sinceproj");
+        assert_eq!(evo_val["since_label"], since_arg);
+        assert!(evo_val["added_count"].as_u64().unwrap() >= 1);
+    }
+
+    let bad_out = run_vos(&db, &["changed-since", "-5d", "sinceproj"]);
+    assert!(!bad_out.0);
+}

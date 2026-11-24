@@ -155,7 +155,7 @@ enum Commands {
     Evolution {
         /// Project name.
         project: String,
-        /// Cutoff date (`YYYY-MM-DD`) or relative days (`30d`).
+        /// Cutoff date (`YYYY-MM-DD`) or relative time (`12h`, `30d`, `2w`, `today`, `yesterday`).
         #[arg(long, default_value = "30d")]
         since: String,
     },
@@ -181,7 +181,7 @@ enum Commands {
     },
     /// Show objects modified, added, or deleted since YYYY-MM-DD (or Nd, e.g. 7d).
     ChangedSince {
-        /// Cutoff date (`YYYY-MM-DD`) or relative days (`7d`).
+        /// Cutoff date (`YYYY-MM-DD`) or relative time (`12h`, `7d`, `2w`, `today`, `yesterday`).
         since: String,
         /// Optional project name (positional).
         project: Option<String>,
@@ -2270,21 +2270,49 @@ fn display_relative<'a>(path: &'a str, root: &str) -> &'a str {
 
 
 fn parse_since_arg(raw: &str) -> Result<i64> {
+    parse_since_arg_at(raw, now_unix(), Local::now().date_naive())
+}
+
+fn parse_since_arg_at(raw: &str, reference_now: i64, today: NaiveDate) -> Result<i64> {
     let trimmed = raw.trim();
-    if let Some(days_str) = trimmed.strip_suffix('d')
-        && let Ok(days) = days_str.parse::<i64>()
-    {
-        return Ok(now_unix().saturating_sub(days.max(0) * 86_400));
+    let lower = trimmed.to_ascii_lowercase();
+
+    match lower.as_str() {
+        "today" => return local_midnight_timestamp(today, trimmed),
+        "yesterday" => {
+            let yday = today
+                .pred_opt()
+                .ok_or_else(|| anyhow::anyhow!("cannot resolve date before {today}"))?;
+            return local_midnight_timestamp(yday, trimmed);
+        }
+        _ => {}
     }
-    let date = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
-        .map_err(|e| anyhow::anyhow!("invalid date '{trimmed}' (expected YYYY-MM-DD or Nd): {e}"))?;
+
+    for (suffix, unit_secs) in [('h', 3_600_i64), ('d', 86_400_i64), ('w', 604_800_i64)] {
+        if let Some(num_str) = lower.strip_suffix(suffix)
+            && let Ok(amount) = num_str.parse::<i64>()
+            && amount >= 0
+        {
+            return Ok(reference_now.saturating_sub(amount.saturating_mul(unit_secs)));
+        }
+    }
+
+    let date = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d").map_err(|e| {
+        anyhow::anyhow!(
+            "invalid since '{trimmed}' (expected YYYY-MM-DD, Nh, Nd, Nw, today, or yesterday): {e}"
+        )
+    })?;
+    local_midnight_timestamp(date, trimmed)
+}
+
+fn local_midnight_timestamp(date: NaiveDate, label: &str) -> Result<i64> {
     let naive_dt = date
         .and_hms_opt(0, 0, 0)
-        .ok_or_else(|| anyhow::anyhow!("invalid midnight for {trimmed}"))?;
+        .ok_or_else(|| anyhow::anyhow!("invalid midnight for {label}"))?;
     let local_dt = Local
         .from_local_datetime(&naive_dt)
         .earliest()
-        .ok_or_else(|| anyhow::anyhow!("cannot resolve local time for {trimmed}"))?;
+        .ok_or_else(|| anyhow::anyhow!("cannot resolve local time for {label}"))?;
     Ok(local_dt.timestamp())
 }
 
@@ -2665,4 +2693,39 @@ fn refresh_project_index_if_present(store: &mut Store, project_name: &str) -> Re
 struct JsonProjectRemoveReport {
     project: String,
     removed_objects: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_since_supports_relative_units_keywords_and_dates() {
+        let now = 1_760_000_000_i64;
+        let today = NaiveDate::from_ymd_opt(2026, 11, 24).unwrap();
+
+        assert_eq!(parse_since_arg_at("12h", now, today).unwrap(), now - 12 * 3_600);
+        assert_eq!(parse_since_arg_at("7d", now, today).unwrap(), now - 7 * 86_400);
+        assert_eq!(parse_since_arg_at("2W", now, today).unwrap(), now - 14 * 86_400);
+        assert_eq!(parse_since_arg_at("0d", now, today).unwrap(), now);
+
+        let today_ts = parse_since_arg_at(" today ", now, today).unwrap();
+        let yesterday_ts = parse_since_arg_at("YESTERDAY", now, today).unwrap();
+        let explicit_ts = parse_since_arg_at("2026-11-24", now, today).unwrap();
+        assert_eq!(today_ts, explicit_ts);
+        assert_eq!(today_ts - yesterday_ts, 86_400);
+    }
+
+    #[test]
+    fn parse_since_rejects_invalid_inputs() {
+        let now = 1_760_000_000_i64;
+        let today = NaiveDate::from_ymd_opt(2026, 11, 24).unwrap();
+
+        for bad in ["", "-3d", "abc", "2026-13-40", "5m"] {
+            assert!(
+                parse_since_arg_at(bad, now, today).is_err(),
+                "expected error for '{bad}'"
+            );
+        }
+    }
 }
