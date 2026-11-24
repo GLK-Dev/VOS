@@ -179,6 +179,70 @@ impl Store {
         Ok(project)
     }
 
+    /// Updates a registered project's name, root path, or description while preserving history.
+    pub fn update_project(
+        &self,
+        name: &str,
+        new_name: Option<&str>,
+        new_root_path: Option<&Path>,
+        new_description: Option<&str>,
+    ) -> Result<Project, StoreError> {
+        if new_name.is_none() && new_root_path.is_none() && new_description.is_none() {
+            return Err(StoreError::InvalidInput(
+                "provide --rename, --path, or --description to update".to_string(),
+            ));
+        }
+
+        let existing = self
+            .get_project_by_name(name)?
+            .ok_or_else(|| StoreError::NotFound("project", name.to_string()))?;
+
+        let updated_name = match new_name {
+            Some(raw) => {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    return Err(StoreError::InvalidInput(
+                        "project name cannot be empty".to_string(),
+                    ));
+                }
+                if trimmed != existing.name && self.get_project_by_name(trimmed)?.is_some() {
+                    return Err(StoreError::AlreadyExists("project", trimmed.to_string()));
+                }
+                trimmed.to_string()
+            }
+            None => existing.name.clone(),
+        };
+
+        let updated_root = match new_root_path {
+            Some(p) => Some(canonicalize_path(p)?),
+            None => existing.root_path.clone(),
+        };
+
+        let updated_desc = match new_description {
+            Some(raw) => {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            }
+            None => existing.description.clone(),
+        };
+
+        let now = now_unix();
+        self.conn.execute(
+            "UPDATE projects
+             SET name = ?1, root_path = ?2, description = ?3, updated_at = ?4
+             WHERE id = ?5",
+            params![updated_name, updated_root, updated_desc, now, existing.id],
+        )?;
+
+        info!(project = %updated_name, id = %existing.id, "updated project metadata");
+        self.get_project_by_name(&updated_name)?
+            .ok_or_else(|| StoreError::NotFound("project", updated_name))
+    }
+
     /// Removes a project and all associated objects, chunks, tags, relations, events, snapshots, and sessions.
     pub fn delete_project(&mut self, name: &str) -> Result<usize, StoreError> {
         let project = self
@@ -564,5 +628,53 @@ mod doctor_tests {
         assert!(fixed.repaired);
         assert_eq!(fixed.stale_deleted_relations, 0);
         assert!(fixed.healthy);
+    }
+
+    #[test]
+    fn update_project_changes_metadata_without_losing_sessions_or_tags() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir_a = tmp.path().join("proj_a");
+        let dir_b = tmp.path().join("proj_b");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store
+            .create_project("orig", Some(&dir_a), Some("Initial"))
+            .unwrap();
+        store.create_project("other", None, None).unwrap();
+
+        let obj_id = store
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: dir_a.join("README.md").to_string_lossy().into_owned(),
+                kind: vos_core::ObjectKind::Note,
+                title: "README.md".to_string(),
+                summary: None,
+                content_hash: "h1".to_string(),
+                size_bytes: 12,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec!["# Orig".to_string()],
+            })
+            .unwrap()
+            .object_id()
+            .to_string();
+        store.add_tags_scoped(&obj_id, Some("orig"), &["core".into()]).unwrap();
+        store.start_session("orig", Some("keep me")).unwrap();
+        store.stop_session(Some("orig"), Some(5), None).unwrap();
+
+        assert!(store.update_project("orig", None, None, None).is_err());
+        assert!(store.update_project("orig", Some("other"), None, None).is_err());
+
+        let updated = store
+            .update_project("orig", Some("renamed"), Some(&dir_b), Some("Moved"))
+            .unwrap();
+        assert_eq!(updated.id, proj.id);
+        assert_eq!(updated.name, "renamed");
+        assert_eq!(updated.description.as_deref(), Some("Moved"));
+        assert!(updated.root_path.as_deref().unwrap().ends_with("proj_b"));
+        assert_eq!(store.list_sessions(Some("renamed"), 5).unwrap().len(), 1);
+        assert_eq!(store.list_tags(Some("renamed"), 5).unwrap()[0].tag, "core");
     }
 }

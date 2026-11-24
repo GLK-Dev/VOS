@@ -433,6 +433,20 @@ enum ProjectCommands {
     },
     /// List all projects.
     List,
+    /// Update a project's name, root directory, or description while preserving history.
+    Update {
+        /// Current registered project name.
+        name: String,
+        /// New project name.
+        #[arg(long)]
+        rename: Option<String>,
+        /// New root directory path on disk.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// New description (pass empty string to clear).
+        #[arg(long)]
+        description: Option<String>,
+    },
     /// Remove a project and all its indexed objects, snapshots, and sessions from the database.
     Remove {
         /// Registered project name.
@@ -451,62 +465,7 @@ fn main() -> Result<()> {
     let experimental = cli.experimental;
     let json = cli.json;
     match cli.command {
-        Commands::Project { action } => match action {
-            ProjectCommands::Create {
-                name,
-                path,
-                description,
-            } => {
-                let project = store.create_project(&name, Some(&path), description.as_deref())?;
-                if json {
-                    return print_json(&project);
-                }
-                println!("Created project '{}' ({})", project.name, project.id);
-                if let Some(root) = project.root_path {
-                    println!("Root: {root}");
-                }
-            }
-            ProjectCommands::List => {
-                let projects = store.list_projects()?;
-                if json {
-                    return print_json(&projects);
-                }
-                if projects.is_empty() {
-                    println!("No projects yet. Create one with `vos project create <name> <path>`.");
-                } else {
-                    for item in projects {
-                        let last = item
-                            .last_indexed_at
-                            .map(format_ts)
-                            .unwrap_or_else(|| "never".to_string());
-                        println!(
-                            "{} ({}) | active: {} | deleted: {} | last_indexed: {}",
-                            item.project.name,
-                            item.project.id,
-                            item.active_objects,
-                            item.deleted_objects,
-                            last
-                        );
-                        if let Some(root) = item.project.root_path {
-                            println!("  root: {root}");
-                        }
-                    }
-                }
-            }
-            ProjectCommands::Remove { name } => {
-                let removed_objects = store.delete_project(&name)?;
-                if json {
-                    return print_json(&JsonProjectRemoveReport {
-                        project: name,
-                        removed_objects,
-                    });
-                }
-                println!(
-                    "Removed project '{}' ({} indexed object(s) purged).",
-                    name, removed_objects
-                );
-            }
-        },
+        Commands::Project { action } => handle_project(&mut store, action, json)?,
         Commands::Index {
             path,
             project,
@@ -1813,6 +1772,94 @@ fn main() -> Result<()> {
         Commands::Benchmark { action } => handle_benchmark(&store, action, json)?,
     }
 
+    Ok(())
+}
+
+#[inline(never)]
+fn handle_project(store: &mut Store, action: ProjectCommands, json: bool) -> Result<()> {
+    match action {
+        ProjectCommands::Create {
+            name,
+            path,
+            description,
+        } => {
+            let project = store.create_project(&name, Some(&path), description.as_deref())?;
+            if json {
+                return print_json(&project);
+            }
+            println!("Created project '{}' ({})", project.name, project.id);
+            if let Some(root) = project.root_path {
+                println!("Root: {root}");
+            }
+        }
+        ProjectCommands::List => {
+            let projects = store.list_projects()?;
+            if json {
+                return print_json(&projects);
+            }
+            if projects.is_empty() {
+                println!("No projects yet. Create one with `vos project create <name> <path>`.");
+            } else {
+                for item in projects {
+                    let last = item
+                        .last_indexed_at
+                        .map(format_ts)
+                        .unwrap_or_else(|| "never".to_string());
+                    println!(
+                        "{} ({}) | active: {} | deleted: {} | last_indexed: {}",
+                        item.project.name,
+                        item.project.id,
+                        item.active_objects,
+                        item.deleted_objects,
+                        last
+                    );
+                    if let Some(root) = item.project.root_path {
+                        println!("  root: {root}");
+                    }
+                }
+            }
+        }
+        ProjectCommands::Update {
+            name,
+            rename,
+            path,
+            description,
+        } => {
+            let path_changed = path.is_some();
+            let project = store.update_project(
+                &name,
+                rename.as_deref(),
+                path.as_deref(),
+                description.as_deref(),
+            )?;
+            if json {
+                return print_json(&project);
+            }
+            println!("Updated project '{}' ({})", project.name, project.id);
+            if let Some(ref root) = project.root_path {
+                println!("Root: {root}");
+            }
+            if let Some(ref desc) = project.description {
+                println!("Description: {desc}");
+            }
+            if path_changed {
+                println!("Hint: run `vos index --all` to re-index files under the updated root path.");
+            }
+        }
+        ProjectCommands::Remove { name } => {
+            let removed_objects = store.delete_project(&name)?;
+            if json {
+                return print_json(&JsonProjectRemoveReport {
+                    project: name,
+                    removed_objects,
+                });
+            }
+            println!(
+                "Removed project '{}' ({} indexed object(s) purged).",
+                name, removed_objects
+            );
+        }
+    }
     Ok(())
 }
 

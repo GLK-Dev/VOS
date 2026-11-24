@@ -877,3 +877,54 @@ fn cli_benchmark_search_thresholds_pass_and_fail_cleanly() {
     assert!(stdout.contains("\"top5_passed\": 1"));
     assert!(stderr.contains("--min-mrr"));
 }
+
+#[test]
+fn cli_project_update_preserves_sessions_when_moving_and_renaming() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let old_dir = tmp.path().join("old_app");
+    let new_dir = tmp.path().join("new_app");
+    fs::create_dir_all(&old_dir).unwrap();
+    fs::write(old_dir.join("README.md"), "# MovedApp\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "oldapp", old_dir.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", "--all"]);
+    assert_vos_ok(&db, &["session", "start", "oldapp"]);
+    assert_vos_ok(&db, &["session", "stop", "oldapp", "--quality", "5"]);
+
+    fs::rename(&old_dir, &new_dir).unwrap();
+    let doc_pre: serde_json::Value =
+        serde_json::from_str(&assert_vos_ok(&db, &["doctor", "--json"])).unwrap();
+    assert_eq!(doc_pre["healthy"], false);
+
+    let updated_json = assert_vos_ok(
+        &db,
+        &[
+            "project",
+            "update",
+            "oldapp",
+            "--rename",
+            "newapp",
+            "--path",
+            new_dir.to_str().unwrap(),
+            "--description",
+            "Relocated project",
+            "--json",
+        ],
+    );
+    let updated: serde_json::Value = serde_json::from_str(&updated_json).unwrap();
+    assert_eq!(updated["name"], "newapp");
+    assert_eq!(updated["description"], "Relocated project");
+
+    let sessions: Vec<serde_json::Value> = serde_json::from_str(&assert_vos_ok(
+        &db,
+        &["session", "list", "newapp", "--json"],
+    ))
+    .unwrap();
+    assert_eq!(sessions.len(), 1);
+
+    assert_vos_ok(&db, &["index", "--all"]);
+    let doc_post: serde_json::Value =
+        serde_json::from_str(&assert_vos_ok(&db, &["doctor", "--json"])).unwrap();
+    assert_eq!(doc_post["healthy"], true);
+}

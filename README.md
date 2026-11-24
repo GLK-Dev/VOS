@@ -13,7 +13,7 @@ See [SPEC.md](SPEC.md) for the canonical v0.1 specification, [AGENTS.md](AGENTS.
 ### Validation Summary
 
 - `10` real projects indexed (`780+` active objects, `1690+` deterministic relations)
-- `77 / 77` workspace tests passing (`0` clippy warnings under `-D warnings`)
+- `79 / 79` workspace tests passing (`0` clippy warnings under `-D warnings`)
 - `30 / 30` live sprint recovery scenarios passing (`~110ms` median CLI latency)
 - `24 / 24` isolated multi-project session lifecycle checks passing (`active=0`)
 
@@ -36,6 +36,7 @@ cargo install --path apps/vos-cli
 
 # Register and idempotently index a project
 vos project create my-app ./path/to/project
+vos project update my-app --path ./new/path --description "Core service"
 vos project remove old-app
 vos index ./path/to/project --project my-app
 vos index --all
