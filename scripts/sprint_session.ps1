@@ -25,13 +25,10 @@ $predicted = "manual"
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
 if (-not $WithoutVos) {
-    $startOut = (vos session start $Project --note $Task) 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) { throw "Failed to start VOS session: $startOut" }
-    if ($startOut -match 'Predicted Difficulty:\s+(\S+)') {
-        $predicted = $matches[1]
-    } else {
-        $predicted = "Unknown"
-    }
+    $startJson = (vos session start $Project --note $Task --json) 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { throw "Failed to start VOS session: $startJson" }
+    $startObj = $startJson | ConvertFrom-Json
+    $predicted = if ($startObj.predicted_difficulty) { "$($startObj.predicted_difficulty)" } else { "Unknown" }
 
     Write-Host "`n=== VOS Recovery ($Project | Predicted: $predicted) ===" -ForegroundColor Cyan
     switch ($FirstCommand) {
@@ -66,10 +63,13 @@ if ($elapsedMin -lt 0.1) { $elapsedMin = 0.1 }
 $daysAway = Read-Host "Days away (check 'Last activity' above, or enter number)"
 if ([string]::IsNullOrWhiteSpace($daysAway)) { $daysAway = "0" }
 
-$qualityRaw = Read-Host "Recovery Quality (1=useless .. 5=full context)"
-$quality = 3
-if (-not [int]::TryParse($qualityRaw, [ref]$quality) -or $quality -lt 1 -or $quality -gt 5) {
-    throw "Quality must be an integer from 1 to 5"
+$quality = 0
+while ($true) {
+    $qualityRaw = Read-Host "Recovery Quality (1=useless .. 5=full context)"
+    if ([int]::TryParse($qualityRaw, [ref]$quality) -and $quality -ge 1 -and $quality -le 5) {
+        break
+    }
+    Write-Host "Please enter an integer from 1 to 5." -ForegroundColor Yellow
 }
 
 $helpful = Read-Host "Helpful signals (comma-separated, e.g. Critical Risk, Hub Importance, Continue)"
@@ -88,7 +88,11 @@ $safeNotes = ($notes -replace '\|', '/').Trim()
 
 if (-not $WithoutVos) {
     $stopNote = "helpful=[$safeHelpful] ignored=[$safeIgnored] $safeNotes"
-    vos session stop $Project --quality $quality --note $stopNote | Out-Null
+    $stopJson = (vos session stop $Project --quality $quality --note $stopNote --json) 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { throw "Failed to stop VOS session: $stopJson" }
+    $stopObj = $stopJson | ConvertFrom-Json
+    $areasText = if ($stopObj.productive_areas -and $stopObj.productive_areas.Count -gt 0) { $stopObj.productive_areas -join ", " } else { "-" }
+    Write-Host ("`nSession closed ({0}s): files_touched={1} | productive_areas=[{2}]" -f ($stopObj.duration_secs ?? 0), $stopObj.files_changed_count, $areasText) -ForegroundColor Cyan
 }
 
 $today = Get-Date -Format "yyyy-MM-dd"
