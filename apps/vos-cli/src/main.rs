@@ -1,7 +1,7 @@
 //! Command-line interface for VOS (Project Memory System).
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use chrono::{DateTime, Local, NaiveDate, TimeZone};
@@ -42,13 +42,16 @@ enum Commands {
         #[command(subcommand)]
         action: ProjectCommands,
     },
-    /// Idempotently index a file or directory.
+    /// Idempotently index a file or directory (or all registered projects with --all).
     Index {
-        /// File or directory path to index.
-        path: PathBuf,
+        /// File or directory path to index (required unless --all is specified).
+        path: Option<PathBuf>,
         /// Optional project name to associate indexed objects with.
         #[arg(long)]
         project: Option<String>,
+        /// Refresh all registered projects using their stored root paths.
+        #[arg(long)]
+        all: bool,
         /// Include files ignored by .gitignore / .vosignore.
         #[arg(long)]
         no_ignore: bool,
@@ -128,10 +131,13 @@ enum Commands {
     Drift {
         /// Project name.
         project: String,
-    },    /// Decision-support health, pending work, and risk summary for a project.
+    },    /// Decision-support health, pending work, and risk summary for a project (or all projects with --all).
     Status {
-        /// Project name.
-        project: String,
+        /// Project name (required unless --all is specified).
+        project: Option<String>,
+        /// Summarize health, risks, and coverage across all registered projects.
+        #[arg(long)]
+        all: bool,
     },
     /// Explain a concept deterministically using project docs, code, and `config/concepts.yaml`.
     Explain {
@@ -229,12 +235,18 @@ enum Commands {
         #[arg(long, default_value_t = 15)]
         limit: usize,
     },
-    /// Compare two saved project snapshots to inspect evolution and risk changes.
+    /// Compare two saved snapshots, or compare a saved snapshot against live state with --live.
     CompareSnapshot {
         /// Baseline snapshot numeric ID.
-        from_id: i64,
-        /// Target snapshot numeric ID.
-        to_id: i64,
+        from_id: Option<i64>,
+        /// Target snapshot numeric ID (omit when passing --live).
+        to_id: Option<i64>,
+        /// Compare baseline (or latest snapshot of --project) against live project state.
+        #[arg(long)]
+        live: bool,
+        /// Project name for --live comparison (defaults to baseline snapshot project).
+        #[arg(long)]
+        project: Option<String>,
     },
     /// Track recovery & work sessions (`start`, `stop`, `list`, `stats`).
     Session {
@@ -393,42 +405,43 @@ fn main() -> Result<()> {
         Commands::Index {
             path,
             project,
+            all,
             no_ignore,
         } => {
-            let report = index_path_with_options(
-                &mut store,
-                &path,
-                project.as_deref(),
-                IndexOptions { no_ignore },
-            )?;
-            if json {
-                return print_json(&JsonIndexReport {
-                    scanned: report.scanned,
-                    added: report.added,
-                    modified: report.modified,
-                    restored: report.restored,
-                    unchanged: report.unchanged,
-                    deleted: report.deleted,
-                    skipped: report.skipped,
-                    relations: report.relations,
-                    elapsed_ms: report.elapsed.as_millis(),
-                });
+            if all {
+                let batch = index_all_projects(&mut store, no_ignore)?;
+                if json {
+                    return print_json(&batch);
+                }
+                print_all_index_report(&batch);
+            } else {
+                let target_path = path
+                    .ok_or_else(|| anyhow::anyhow!("provide a path to index or pass --all"))?;
+                let report = index_path_with_options(
+                    &mut store,
+                    &target_path,
+                    project.as_deref(),
+                    IndexOptions { no_ignore },
+                )?;
+                if json {
+                    return print_json(&JsonIndexReport::from(&report));
+                }
+                println!("Scanned:   {}", report.scanned);
+                println!(
+                    "Updated:   {} (added: {}, modified: {}, restored: {})",
+                    report.added + report.modified + report.restored,
+                    report.added,
+                    report.modified,
+                    report.restored
+                );
+                println!("Unchanged: {}", report.unchanged);
+                println!("Deleted:   {}", report.deleted);
+                println!("Relations: {}", report.relations);
+                if report.skipped > 0 {
+                    println!("Skipped:   {}", report.skipped);
+                }
+                println!("Elapsed:   {:.2}s", report.elapsed.as_secs_f64());
             }
-            println!("Scanned:   {}", report.scanned);
-            println!(
-                "Updated:   {} (added: {}, modified: {}, restored: {})",
-                report.added + report.modified + report.restored,
-                report.added,
-                report.modified,
-                report.restored
-            );
-            println!("Unchanged: {}", report.unchanged);
-            println!("Deleted:   {}", report.deleted);
-            println!("Relations: {}", report.relations);
-            if report.skipped > 0 {
-                println!("Skipped:   {}", report.skipped);
-            }
-            println!("Elapsed:   {:.2}s", report.elapsed.as_secs_f64());
         }
         Commands::Search {
             query,
@@ -762,7 +775,25 @@ fn main() -> Result<()> {
                     }
                 }
             }
-        }        Commands::Status { project } => {
+        }
+        Commands::Status { project, all } => {
+            if all {
+                let rows = collect_all_statuses(&store, experimental)?;
+                if json {
+                    let payload: Vec<JsonStatusWithExperimental<'_>> = rows
+                        .iter()
+                        .map(|(st, pred)| JsonStatusWithExperimental {
+                            status: st,
+                            recovery_prediction: pred.clone(),
+                        })
+                        .collect();
+                    return print_json(&payload);
+                }
+                print_all_statuses(&rows);
+                return Ok(());
+            }
+            let project = project
+                .ok_or_else(|| anyhow::anyhow!("provide a project name or pass --all"))?;
             let st = store.project_status(&project)?;
             let prediction = if experimental {
                 Some(store.predict_recovery_difficulty(&st))
@@ -1606,19 +1637,32 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Commands::CompareSnapshot { from_id, to_id } => {
-            let diff = store.compare_snapshots(from_id, to_id)?;
+        Commands::CompareSnapshot {
+            from_id,
+            to_id,
+            live,
+            project,
+        } => {
+            let diff = resolve_snapshot_diff(&store, from_id, to_id, live, project)?;
             if json {
                 return print_json(&diff);
             }
+            let target_label = if diff.to.id == 0 {
+                format!("LIVE ({}, {})", diff.to.project_name, format_ts(diff.to.created_at))
+            } else {
+                format!(
+                    "#{} ({}, {})",
+                    diff.to.id,
+                    diff.to.project_name,
+                    format_ts(diff.to.created_at)
+                )
+            };
             println!(
-                "Snapshot Diff: #{} ({}, {}) -> #{} ({}, {})",
+                "Snapshot Diff: #{} ({}, {}) -> {}",
                 diff.from.id,
                 diff.from.project_name,
                 format_ts(diff.from.created_at),
-                diff.to.id,
-                diff.to.project_name,
-                format_ts(diff.to.created_at)
+                target_label
             );
             println!("\nMetrics Delta:");
             println!("  Health:         {} -> {}", diff.from.health, diff.to.health);
@@ -2202,5 +2246,209 @@ fn format_duration(secs: i64) -> String {
         format!("{}m {}s", s / 60, s % 60)
     } else {
         format!("{}h {}m", s / 3600, (s % 3600) / 60)
+    }
+}
+
+impl From<&vos_indexer::IndexReport> for JsonIndexReport {
+    fn from(report: &vos_indexer::IndexReport) -> Self {
+        Self {
+            scanned: report.scanned,
+            added: report.added,
+            modified: report.modified,
+            restored: report.restored,
+            unchanged: report.unchanged,
+            deleted: report.deleted,
+            skipped: report.skipped,
+            relations: report.relations,
+            elapsed_ms: report.elapsed.as_millis(),
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+struct JsonAllIndexEntry {
+    project: String,
+    #[serde(flatten)]
+    report: JsonIndexReport,
+}
+
+#[derive(serde::Serialize)]
+struct JsonAllIndexReport {
+    projects: Vec<JsonAllIndexEntry>,
+    skipped_projects: Vec<String>,
+    total_scanned: usize,
+    total_added: usize,
+    total_modified: usize,
+    total_restored: usize,
+    total_unchanged: usize,
+    total_deleted: usize,
+    total_relations: usize,
+}
+
+fn index_all_projects(store: &mut Store, no_ignore: bool) -> Result<JsonAllIndexReport> {
+    let projects = store.list_projects()?;
+    let mut entries = Vec::new();
+    let mut skipped_projects = Vec::new();
+    let mut total_scanned = 0_usize;
+    let mut total_added = 0_usize;
+    let mut total_modified = 0_usize;
+    let mut total_restored = 0_usize;
+    let mut total_unchanged = 0_usize;
+    let mut total_deleted = 0_usize;
+    let mut total_relations = 0_usize;
+
+    for item in projects {
+        let Some(root) = item.project.root_path.as_deref() else {
+            skipped_projects.push(format!("{} (no root_path)", item.project.name));
+            continue;
+        };
+        let root_path = Path::new(root);
+        if !root_path.exists() {
+            skipped_projects.push(format!("{} (missing: {root})", item.project.name));
+            continue;
+        }
+        let report = index_path_with_options(
+            store,
+            root_path,
+            Some(&item.project.name),
+            IndexOptions { no_ignore },
+        )?;
+        total_scanned += report.scanned;
+        total_added += report.added;
+        total_modified += report.modified;
+        total_restored += report.restored;
+        total_unchanged += report.unchanged;
+        total_deleted += report.deleted;
+        total_relations += report.relations;
+        entries.push(JsonAllIndexEntry {
+            project: item.project.name,
+            report: JsonIndexReport::from(&report),
+        });
+    }
+
+    Ok(JsonAllIndexReport {
+        projects: entries,
+        skipped_projects,
+        total_scanned,
+        total_added,
+        total_modified,
+        total_restored,
+        total_unchanged,
+        total_deleted,
+        total_relations,
+    })
+}
+
+fn print_all_index_report(batch: &JsonAllIndexReport) {
+    if batch.projects.is_empty() {
+        println!("No registered projects with accessible paths to index.");
+    } else {
+        for entry in &batch.projects {
+            let upd = entry.report.added + entry.report.modified + entry.report.restored;
+            println!(
+                "{:<14} | scanned: {:>4} | updated: {:>3} | unchanged: {:>4} | deleted: {:>2} | rels: {:>4} | {}ms",
+                entry.project,
+                entry.report.scanned,
+                upd,
+                entry.report.unchanged,
+                entry.report.deleted,
+                entry.report.relations,
+                entry.report.elapsed_ms
+            );
+        }
+        println!(
+            "\nTotal ({} projects): scanned={} updated={} unchanged={} deleted={} relations={}",
+            batch.projects.len(),
+            batch.total_scanned,
+            batch.total_added + batch.total_modified + batch.total_restored,
+            batch.total_unchanged,
+            batch.total_deleted,
+            batch.total_relations
+        );
+    }
+    for skipped in &batch.skipped_projects {
+        println!("Skipped: {skipped}");
+    }
+}
+
+fn collect_all_statuses(
+    store: &Store,
+    experimental: bool,
+) -> Result<Vec<(vos_core::ProjectStatus, Option<vos_core::RecoveryPrediction>)>> {
+    let projects = store.list_projects()?;
+    let mut rows = Vec::with_capacity(projects.len());
+    for item in projects {
+        let st = store.project_status(&item.project.name)?;
+        let pred = if experimental {
+            Some(store.predict_recovery_difficulty(&st))
+        } else {
+            None
+        };
+        rows.push((st, pred));
+    }
+    rows.sort_by(|a, b| {
+        b.0.critical_risk_count
+            .cmp(&a.0.critical_risk_count)
+            .then_with(|| b.0.high_risk_count.cmp(&a.0.high_risk_count))
+            .then_with(|| b.0.last_change_at.cmp(&a.0.last_change_at))
+            .then_with(|| a.0.project.name.cmp(&b.0.project.name))
+    });
+    Ok(rows)
+}
+
+fn print_all_statuses(rows: &[(vos_core::ProjectStatus, Option<vos_core::RecoveryPrediction>)]) {
+    if rows.is_empty() {
+        println!("No projects registered yet.");
+        return;
+    }
+    for (st, pred) in rows {
+        let last = st
+            .last_change_at
+            .map(format_day)
+            .unwrap_or_else(|| "never".to_string());
+        let exp_col = match pred {
+            Some(p) => format!(" | diff: {:<6} ({})", p.difficulty.as_str(), p.score),
+            None => String::new(),
+        };
+        println!(
+            "{:<14} | {:<7} | crit: {:>2} | high: {:>2} | cov: {:>5.1}% ({:<7}) | files: {:>3} | last: {}{}",
+            st.project.name,
+            st.health.as_str(),
+            st.critical_risk_count,
+            st.high_risk_count,
+            st.coverage_ratio,
+            st.documentation_health.as_str(),
+            st.active_objects,
+            last,
+            exp_col
+        );
+    }
+}
+
+fn resolve_snapshot_diff(
+    store: &Store,
+    from_id: Option<i64>,
+    to_id: Option<i64>,
+    live: bool,
+    project: Option<String>,
+) -> Result<vos_core::SnapshotDiff> {
+    if live {
+        let target_project = match project {
+            Some(name) => name,
+            None => {
+                let id = from_id.ok_or_else(|| {
+                    anyhow::anyhow!("provide --project <name> or baseline snapshot ID with --live")
+                })?;
+                store.get_snapshot(id)?.project_name
+            }
+        };
+        Ok(store.compare_snapshot_to_live(&target_project, from_id)?)
+    } else {
+        let from = from_id
+            .ok_or_else(|| anyhow::anyhow!("provide <FROM_ID> <TO_ID>, or use --live"))?;
+        let to = to_id.ok_or_else(|| {
+            anyhow::anyhow!("provide <TO_ID> (or pass --live to compare against current state)")
+        })?;
+        Ok(store.compare_snapshots(from, to)?)
     }
 }

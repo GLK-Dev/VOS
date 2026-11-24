@@ -11,8 +11,7 @@ use crate::recovery::object_area;
 use crate::{Store, StoreError};
 
 impl Store {
-    /// Captures and persists a point-in-time snapshot of project status, coverage, and risks.
-    pub fn save_snapshot(
+    fn build_live_snapshot(
         &self,
         project_name: &str,
         label: Option<&str>,
@@ -52,6 +51,36 @@ impl Store {
             .filter(|s| !s.is_empty())
             .map(str::to_string);
 
+        Ok(ProjectSnapshot {
+            id: 0,
+            project_id: st.project.id,
+            project_name: st.project.name,
+            label: clean_label,
+            health: st.health,
+            active_objects: st.active_objects,
+            deleted_objects: st.deleted_objects,
+            relations_count: relations_count.max(0) as usize,
+            coverage_ratio: st.coverage_ratio,
+            documentation_health: st.documentation_health,
+            critical_risks: st.critical_risk_count,
+            high_risks: st.high_risk_count,
+            open_questions: st.open_questions,
+            pending_work: st.pending_work,
+            active_areas,
+            risk_areas: st.risk_areas,
+            recent_changes,
+            created_at: now,
+        })
+    }
+
+    /// Captures and persists a point-in-time snapshot of project status, coverage, and risks.
+    pub fn save_snapshot(
+        &self,
+        project_name: &str,
+        label: Option<&str>,
+    ) -> Result<ProjectSnapshot, StoreError> {
+        let snap = self.build_live_snapshot(project_name, label)?;
+
         self.conn.execute(
             "INSERT INTO snapshots (
                 project_id, label, health, active_objects, deleted_objects,
@@ -60,22 +89,22 @@ impl Store {
                 active_areas_text, risk_areas_text, recent_changes_text, created_at
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
-                st.project.id,
-                clean_label,
-                st.health.as_str(),
-                st.active_objects as i64,
-                st.deleted_objects as i64,
-                relations_count.max(0),
-                st.coverage_ratio,
-                st.documentation_health.as_str(),
-                st.critical_risk_count as i64,
-                st.high_risk_count as i64,
-                encode_list(&st.open_questions)?,
-                encode_list(&st.pending_work)?,
-                encode_list(&active_areas)?,
-                encode_list(&st.risk_areas)?,
-                encode_list(&recent_changes)?,
-                now,
+                snap.project_id,
+                snap.label,
+                snap.health.as_str(),
+                snap.active_objects as i64,
+                snap.deleted_objects as i64,
+                snap.relations_count as i64,
+                snap.coverage_ratio,
+                snap.documentation_health.as_str(),
+                snap.critical_risks as i64,
+                snap.high_risks as i64,
+                encode_list(&snap.open_questions)?,
+                encode_list(&snap.pending_work)?,
+                encode_list(&snap.active_areas)?,
+                encode_list(&snap.risk_areas)?,
+                encode_list(&snap.recent_changes)?,
+                snap.created_at,
             ],
         )?;
 
@@ -133,35 +162,34 @@ impl Store {
     pub fn compare_snapshots(&self, from_id: i64, to_id: i64) -> Result<SnapshotDiff, StoreError> {
         let from = self.get_snapshot(from_id)?;
         let to = self.get_snapshot(to_id)?;
+        Ok(compute_snapshot_diff(from, to))
+    }
 
-        let active_delta = to.active_objects as isize - from.active_objects as isize;
-        let deleted_delta = to.deleted_objects as isize - from.deleted_objects as isize;
-        let relations_delta = to.relations_count as isize - from.relations_count as isize;
-        let coverage_delta = to.coverage_ratio - from.coverage_ratio;
-        let critical_risks_delta = to.critical_risks as isize - from.critical_risks as isize;
-        let high_risks_delta = to.high_risks as isize - from.high_risks as isize;
-
-        let added_pending_work = list_diff(&to.pending_work, &from.pending_work);
-        let resolved_pending_work = list_diff(&from.pending_work, &to.pending_work);
-        let added_risks = list_diff(&to.risk_areas, &from.risk_areas);
-        let resolved_risks = list_diff(&from.risk_areas, &to.risk_areas);
-        let new_active_areas = list_diff(&to.active_areas, &from.active_areas);
-
-        Ok(SnapshotDiff {
-            from,
-            to,
-            active_delta,
-            deleted_delta,
-            relations_delta,
-            coverage_delta,
-            critical_risks_delta,
-            high_risks_delta,
-            added_pending_work,
-            resolved_pending_work,
-            added_risks,
-            resolved_risks,
-            new_active_areas,
-        })
+    /// Compares a saved snapshot (or the latest saved snapshot for `project_name`) against live state.
+    pub fn compare_snapshot_to_live(
+        &self,
+        project_name: &str,
+        from_id: Option<i64>,
+    ) -> Result<SnapshotDiff, StoreError> {
+        let from = match from_id {
+            Some(id) => {
+                let snap = self.get_snapshot(id)?;
+                if snap.project_name != project_name {
+                    return Err(StoreError::InvalidInput(format!(
+                        "snapshot #{id} belongs to project '{}', not '{project_name}'",
+                        snap.project_name
+                    )));
+                }
+                snap
+            }
+            None => self
+                .list_snapshots(Some(project_name), 1)?
+                .into_iter()
+                .next()
+                .ok_or_else(|| StoreError::NotFound("snapshot", project_name.to_string()))?,
+        };
+        let live = self.build_live_snapshot(project_name, Some("live"))?;
+        Ok(compute_snapshot_diff(from, live))
     }
 
     /// Starts a tracked work/recovery session for `project_name`, capturing predicted difficulty.
@@ -538,6 +566,24 @@ fn decode_list(raw: &str) -> Vec<String> {
     serde_yaml::from_str(trimmed).unwrap_or_default()
 }
 
+fn compute_snapshot_diff(from: ProjectSnapshot, to: ProjectSnapshot) -> SnapshotDiff {
+    SnapshotDiff {
+        active_delta: to.active_objects as isize - from.active_objects as isize,
+        deleted_delta: to.deleted_objects as isize - from.deleted_objects as isize,
+        relations_delta: to.relations_count as isize - from.relations_count as isize,
+        coverage_delta: to.coverage_ratio - from.coverage_ratio,
+        critical_risks_delta: to.critical_risks as isize - from.critical_risks as isize,
+        high_risks_delta: to.high_risks as isize - from.high_risks as isize,
+        added_pending_work: list_diff(&to.pending_work, &from.pending_work),
+        resolved_pending_work: list_diff(&from.pending_work, &to.pending_work),
+        added_risks: list_diff(&to.risk_areas, &from.risk_areas),
+        resolved_risks: list_diff(&from.risk_areas, &to.risk_areas),
+        new_active_areas: list_diff(&to.active_areas, &from.active_areas),
+        from,
+        to,
+    }
+}
+
 fn list_diff(target: &[String], baseline: &[String]) -> Vec<String> {
     let base_set: HashSet<&str> = baseline.iter().map(String::as_str).collect();
     target
@@ -741,5 +787,55 @@ mod tests {
         assert_eq!(stats.by_predicted_difficulty[2].difficulty, RecoveryDifficulty::Hard);
         assert_eq!(stats.by_predicted_difficulty[2].avg_quality, Some(2.0));
         assert!(!stats.frequent_return_points.is_empty());
+    }
+
+    #[test]
+    fn compare_snapshot_to_live_tracks_deltas_without_saving_second_snapshot() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("livecmp", None, None).unwrap();
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/README.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "README.md".to_string(),
+                summary: Some("Initial".to_string()),
+                content_hash: "h1".to_string(),
+                size_bytes: 50,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec!["# LiveCmp".to_string()],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        let baseline = store.save_snapshot("livecmp", Some("base")).unwrap();
+        assert_eq!(baseline.active_objects, 1);
+
+        let mut batch2 = store.begin_index_batch().unwrap();
+        batch2
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/ROADMAP.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "ROADMAP.md".to_string(),
+                summary: Some("roadmap".to_string()),
+                content_hash: "h2".to_string(),
+                size_bytes: 80,
+                modified_at: 200,
+                is_noise: false,
+                chunks: vec!["- [ ] Add retries".to_string()],
+            })
+            .unwrap();
+        batch2.commit().unwrap();
+
+        let diff = store.compare_snapshot_to_live("livecmp", None).unwrap();
+        assert_eq!(diff.from.id, baseline.id);
+        assert_eq!(diff.to.id, 0);
+        assert_eq!(diff.to.label.as_deref(), Some("live"));
+        assert_eq!(diff.active_delta, 1);
+        assert_eq!(diff.added_pending_work.len(), 1);
+        assert_eq!(store.list_snapshots(Some("livecmp"), 10).unwrap().len(), 1);
     }
 }

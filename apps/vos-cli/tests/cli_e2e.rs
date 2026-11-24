@@ -521,3 +521,42 @@ fn cli_json_output_and_why_experimental_blast_radius_work_end_to_end() {
     assert_eq!(cont_val["last_session"]["stop_note"], "Next: finalize CLI");
     assert!(cont_val["recovery_prediction"]["difficulty"].is_string());
 }
+
+#[test]
+fn cli_all_index_status_and_live_snapshot_diff_work_end_to_end() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let p1 = tmp.path().join("alpha");
+    let p2 = tmp.path().join("beta");
+    fs::create_dir_all(p1.join("src")).unwrap();
+    fs::create_dir_all(p2.join("src")).unwrap();
+    fs::write(p1.join("README.md"), "# Alpha\n").unwrap();
+    fs::write(p1.join("src/lib.rs"), "pub fn a() {}\n").unwrap();
+    fs::write(p2.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "alpha", p1.to_str().unwrap()]);
+    assert_vos_ok(&db, &["project", "create", "beta", p2.to_str().unwrap()]);
+
+    let idx_all_json = assert_vos_ok(&db, &["index", "--all", "--json"]);
+    let idx_val: serde_json::Value = serde_json::from_str(&idx_all_json).expect("index --all json");
+    assert_eq!(idx_val["total_added"], 3);
+
+    let st_all_json = assert_vos_ok(&db, &["status", "--all", "--experimental", "--json"]);
+    let st_arr: Vec<serde_json::Value> = serde_json::from_str(&st_all_json).expect("status --all json");
+    assert_eq!(st_arr.len(), 2);
+    assert!(st_arr[0]["recovery_prediction"]["difficulty"].is_string());
+
+    assert_vos_ok(&db, &["snapshot", "alpha", "--label", "before"]);
+    fs::write(p1.join("README.md"), "# Alpha\n- [ ] Expand alpha\n").unwrap();
+    fs::write(p1.join("src/extra.rs"), "pub fn b() {}\n").unwrap();
+    assert_vos_ok(&db, &["index", "--all"]);
+
+    let live_diff = assert_vos_ok(&db, &["compare-snapshot", "--project", "alpha", "--live"]);
+    assert!(live_diff.contains("-> LIVE (alpha,"));
+    assert!(live_diff.contains("Active Files:   3 (+1)"));
+    assert!(live_diff.contains("New pending work (1):"));
+
+    let snaps_json = assert_vos_ok(&db, &["snapshots", "alpha", "--json"]);
+    let snaps_arr: Vec<serde_json::Value> = serde_json::from_str(&snaps_json).expect("snapshots json");
+    assert_eq!(snaps_arr.len(), 1);
+}

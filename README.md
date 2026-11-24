@@ -13,7 +13,7 @@ See [SPEC.md](SPEC.md) for the canonical v0.1 specification, [AGENTS.md](AGENTS.
 ### Validation Summary
 
 - `10` real projects indexed (`780+` active objects, `1200+` deterministic relations)
-- `45 / 45` workspace tests passing (`0` clippy warnings under `-D warnings`)
+- `47 / 47` workspace tests passing (`0` clippy warnings under `-D warnings`)
 - `30 / 30` live sprint recovery scenarios passing (`~110ms` median CLI latency)
 - `24 / 24` isolated multi-project session lifecycle checks passing (`active=0`)
 
@@ -37,6 +37,7 @@ cargo install --path apps/vos-cli
 # Register and idempotently index a project
 vos project create my-app ./path/to/project
 vos index ./path/to/project --project my-app
+vos index --all
 
 # Context Recovery & Continuation
 vos start my-app
@@ -46,6 +47,7 @@ vos resume my-app
 
 # Decision Support & Project Evolution
 vos status my-app --experimental
+vos status --all --experimental
 vos evolution my-app --since 30d
 vos drift my-app
 vos changed-since 2026-11-01 my-app
@@ -60,10 +62,12 @@ vos why src/lib.rs --project my-app --experimental
 # Snapshots, Sessions & Scriptable JSON Output
 vos snapshot my-app --label before-break
 vos compare-snapshot 1 2
+vos compare-snapshot --project my-app --live
 vos session start my-app --note "Resume task"
 vos session stop my-app --quality 5 --note "Next step"
 vos session stats my-app
-vos status my-app --experimental --json
+vos status my-app --experimental
+vos status --all --experimental --json
 
 # Search, Explainability & Quality Benchmarks
 vos search "scheduler" --explain
