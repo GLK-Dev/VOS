@@ -38,6 +38,7 @@ pub(crate) struct ScannedObjectRefs {
 struct ProjectLookup {
     by_norm_path: HashMap<String, String>,
     by_title: HashMap<String, Vec<String>>,
+    by_workspace_crate: HashMap<String, Option<(PathBuf, String)>>,
 }
 
 impl ProjectLookup {
@@ -48,8 +49,34 @@ impl ProjectLookup {
         let title_key = title.to_ascii_lowercase();
         let entry = self.by_title.entry(title_key).or_default();
         if !entry.contains(&object_id) {
-            entry.push(object_id);
+            entry.push(object_id.clone());
         }
+
+        if title.eq_ignore_ascii_case("lib.rs") {
+            let clean = raw_path.replace('\\', "/");
+            let p = Path::new(&clean);
+            if let Some(src_dir) = p.parent()
+                && src_dir.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.eq_ignore_ascii_case("src"))
+                && let Some(crate_dir) = src_dir.parent()
+                && let Some(dir_name) = crate_dir.file_name().and_then(|n| n.to_str())
+            {
+                let crate_ident = dir_name.replace('-', "_").to_ascii_lowercase();
+                if is_ident(&crate_ident) {
+                    self.by_workspace_crate
+                        .entry(crate_ident)
+                        .and_modify(|slot| *slot = None)
+                        .or_insert_with(|| Some((src_dir.to_path_buf(), object_id)));
+                }
+            }
+        }
+    }
+
+    fn lookup_workspace_crate(&self, ident: &str) -> Option<(&Path, &str)> {
+        let key = ident.to_ascii_lowercase();
+        self.by_workspace_crate
+            .get(&key)?
+            .as_ref()
+            .map(|(dir, id)| (dir.as_path(), id.as_str()))
     }
 
     fn lookup_path(&self, candidate: &Path) -> Option<&str> {
@@ -313,7 +340,12 @@ fn parse_use_statement(stmt: &str, out: &mut Vec<RawRef>) {
         let Some(first) = segments.first() else {
             continue;
         };
-        if matches!(first.as_str(), "crate" | "super" | "self") && segments.len() >= 2 {
+        let is_relative = matches!(first.as_str(), "crate" | "super" | "self") && segments.len() >= 2;
+        let is_crate_ident = !matches!(
+            first.as_str(),
+            "crate" | "super" | "self" | "std" | "core" | "alloc"
+        ) && is_ident(first);
+        if is_relative || is_crate_ident {
             out.push(RawRef::RustUse { segments });
         }
     }
@@ -543,9 +575,15 @@ fn resolve_rust_use(
     lookup: &ProjectLookup,
 ) -> Option<String> {
     let first = segments.first()?.as_str();
-    let (mut base_dir, mut tail) = match first {
-        "crate" => (find_rust_crate_src_root(src_dir, lookup)?, &segments[1..]),
-        "self" => (rust_submodule_base_dir(src_path, src_dir), &segments[1..]),
+    match first {
+        "crate" => {
+            let base_dir = find_rust_crate_src_root(src_dir, lookup)?;
+            resolve_module_path(&base_dir, &segments[1..], lookup)
+        }
+        "self" => {
+            let base_dir = rust_submodule_base_dir(src_path, src_dir);
+            resolve_module_path(&base_dir, &segments[1..], lookup)
+        }
         "super" => {
             let mut dir = rust_submodule_base_dir(src_path, src_dir);
             let mut idx = 0;
@@ -553,17 +591,27 @@ fn resolve_rust_use(
                 dir = dir.parent()?.to_path_buf();
                 idx += 1;
             }
-            (dir, &segments[idx..])
+            resolve_module_path(&dir, &segments[idx..], lookup)
         }
-        _ => return None,
-    };
+        crate_ident => {
+            let (crate_src_dir, lib_id) = lookup.lookup_workspace_crate(crate_ident)?;
+            resolve_module_path(crate_src_dir, &segments[1..], lookup)
+                .or_else(|| Some(lib_id.to_string()))
+        }
+    }
+}
 
+fn resolve_module_path(
+    base_dir: &Path,
+    tail: &[String],
+    lookup: &ProjectLookup,
+) -> Option<String> {
     if tail.is_empty() {
         return None;
     }
     // Check progressively shorter prefixes so `use crate::models::GraphEdge` resolves `src/models.rs`.
     for len in (1..=tail.len()).rev() {
-        let mut candidate_dir = base_dir.clone();
+        let mut candidate_dir = base_dir.to_path_buf();
         for seg in &tail[..len - 1] {
             candidate_dir = candidate_dir.join(seg);
         }
@@ -575,10 +623,6 @@ fn resolve_rust_use(
             return Some(id.to_string());
         }
     }
-
-    // Fallback: `base_dir/mod.rs` or `base_dir.rs` when importing items from parent module.
-    let _ = &mut base_dir;
-    let _ = &mut tail;
     None
 }
 
@@ -713,5 +757,54 @@ use super::util;
             target: "docs/SPEC.md".to_string(),
         }));
         assert!(!md_refs.iter().any(|r| matches!(r, RawRef::MdLink { target } if target.contains("example.com"))));
+    }
+
+    #[test]
+    fn resolves_workspace_crate_use_edges_across_crates() {
+        let scanned = vec![ScannedObjectRefs {
+            object_id: "obj_cli".to_string(),
+            project_id: Some("p1".to_string()),
+            path: "/ws/apps/vos-cli/src/main.rs".to_string(),
+            raw_refs: extract_refs(
+                Path::new("/ws/apps/vos-cli/src/main.rs"),
+                ObjectKind::Code,
+                "use vos_core::util::now_unix;\nuse vos_store::Store;\nuse anyhow::Result;\n",
+            ),
+        }];
+        let active = vec![
+            ActiveObjectRef {
+                id: "obj_cli".to_string(),
+                path: "/ws/apps/vos-cli/src/main.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "main.rs".to_string(),
+                project_id: Some("p1".to_string()),
+            },
+            ActiveObjectRef {
+                id: "obj_core_lib".to_string(),
+                path: "/ws/crates/vos-core/src/lib.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "lib.rs".to_string(),
+                project_id: Some("p1".to_string()),
+            },
+            ActiveObjectRef {
+                id: "obj_core_util".to_string(),
+                path: "/ws/crates/vos-core/src/util.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "util.rs".to_string(),
+                project_id: Some("p1".to_string()),
+            },
+            ActiveObjectRef {
+                id: "obj_store_lib".to_string(),
+                path: "/ws/crates/vos-store/src/lib.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "lib.rs".to_string(),
+                project_id: Some("p1".to_string()),
+            },
+        ];
+
+        let edges = resolve_relations(&scanned, &active, &HashMap::new());
+        assert!(edges.iter().any(|e| e.to_object_id == "obj_core_util" && e.relation_type == RelationType::RustUse));
+        assert!(edges.iter().any(|e| e.to_object_id == "obj_store_lib" && e.relation_type == RelationType::RustUse));
+        assert_eq!(edges.len(), 2);
     }
 }
