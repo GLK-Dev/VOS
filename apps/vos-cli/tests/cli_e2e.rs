@@ -641,6 +641,14 @@ fn cli_show_tag_and_untag_disambiguate_with_project_flag() {
     let by_q_tag = assert_vos_ok(&db, &["search", "one", "--tag", "core", "--project", "repo1", "--json"]);
     let by_q_arr: Vec<serde_json::Value> = serde_json::from_str(&by_q_tag).expect("search query --tag json");
     assert_eq!(by_q_arr.len(), 1);
+
+    let by_kind_code = assert_vos_ok(&db, &["search", "--kind", "code", "--project", "repo1", "--json"]);
+    let kind_arr: Vec<serde_json::Value> = serde_json::from_str(&by_kind_code).expect("search --kind json");
+    assert_eq!(kind_arr.len(), 1);
+    assert_eq!(kind_arr[0]["kind"], "Code");
+
+    let by_kind_note = assert_vos_ok(&db, &["search", "one", "--kind", "note", "--project", "repo1", "--json"]);
+    assert!(serde_json::from_str::<Vec<serde_json::Value>>(&by_kind_note).unwrap().is_empty());
 }
 
 #[test]

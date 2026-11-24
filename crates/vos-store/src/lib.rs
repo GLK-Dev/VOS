@@ -26,6 +26,7 @@ use vos_core::{DoctorReport, EventType, ObjectRecord, Project, ProjectSummary};
 pub use batch::{IndexBatch, RelationInput, UpsertObjectInput, UpsertOutcome};
 pub use benchmark::load_benchmark_cases;
 pub use graph::ActiveObjectRef;
+pub use search::SearchFilters;
 
 const MIGRATIONS: &[(&str, &str)] = &[
     ("0001_init", include_str!("../../../migrations/0001_init.sql")),

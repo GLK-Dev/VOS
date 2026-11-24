@@ -41,6 +41,28 @@ enum StageKind {
     ConceptExpansion,
 }
 
+/// Optional filters applied to full-text or metadata-only `Store::search_with_filters` queries.
+#[derive(Debug, Clone, Copy)]
+pub struct SearchFilters<'a> {
+    pub project: Option<&'a str>,
+    pub tag: Option<&'a str>,
+    pub kind: Option<ObjectKind>,
+    pub limit: usize,
+    pub include_internal: bool,
+}
+
+impl Default for SearchFilters<'_> {
+    fn default() -> Self {
+        Self {
+            project: None,
+            tag: None,
+            kind: None,
+            limit: 10,
+            include_internal: false,
+        }
+    }
+}
+
 struct SearchCandidate {
     hit: SearchHit,
     chunk_hits: usize,
@@ -83,17 +105,46 @@ impl Store {
         limit: usize,
         include_internal: bool,
     ) -> Result<Vec<SearchHit>, StoreError> {
-        let clean_tag = tag
+        self.search_with_filters(
+            query,
+            SearchFilters {
+                project: project_name,
+                tag,
+                kind: None,
+                limit,
+                include_internal,
+            },
+        )
+    }
+
+    /// Searches indexed objects with optional FTS query, project scope, tag filter, and kind filter.
+    pub fn search_with_filters(
+        &self,
+        query: Option<&str>,
+        filters: SearchFilters<'_>,
+    ) -> Result<Vec<SearchHit>, StoreError> {
+        let project_name = filters.project;
+        let include_internal = filters.include_internal;
+        let kind_str = filters.kind.map(|k| k.as_str());
+        let clean_tag = filters
+            .tag
             .map(|t| t.trim().to_lowercase())
             .filter(|t| !t.is_empty());
         let clean_query = query.map(str::trim).filter(|q| !q.is_empty());
-        let requested_limit = limit.clamp(1, 200);
+        let requested_limit = filters.limit.clamp(1, 200);
 
         let Some(query) = clean_query else {
-            let tag_name = clean_tag.ok_or_else(|| {
-                StoreError::InvalidInput("provide a search query or --tag".to_string())
-            })?;
-            return self.search_by_tag(&tag_name, project_name, requested_limit);
+            if clean_tag.is_none() && kind_str.is_none() {
+                return Err(StoreError::InvalidInput(
+                    "provide a search query, --tag, or --kind".to_string(),
+                ));
+            }
+            return self.search_without_query(
+                clean_tag.as_deref(),
+                project_name,
+                kind_str,
+                requested_limit,
+            );
         };
 
         let and_query = build_fts_query(query)?;
@@ -115,6 +166,7 @@ impl Store {
             &and_query,
             project_name,
             clean_tag.as_deref(),
+            kind_str,
             pool_limit,
             StageKind::Stage1And,
             intent,
@@ -131,6 +183,7 @@ impl Store {
                 &or_query,
                 project_name,
                 clean_tag.as_deref(),
+                kind_str,
                 pool_limit,
                 StageKind::Stage2Or,
                 intent,
@@ -147,6 +200,7 @@ impl Store {
                 &concept_fts,
                 project_name,
                 clean_tag.as_deref(),
+                kind_str,
                 pool_limit,
                 StageKind::ConceptExpansion,
                 intent,
@@ -197,24 +251,27 @@ impl Store {
         rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
     }
 
-    fn search_by_tag(
+    fn search_without_query(
         &self,
-        tag_name: &str,
+        tag_name: Option<&str>,
         project_name: Option<&str>,
+        kind_filter: Option<&str>,
         limit: usize,
     ) -> Result<Vec<SearchHit>, StoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT o.id, p.name, o.title, o.path, o.kind, o.is_noise, COALESCE(o.summary, '')
-             FROM tags t
-             JOIN objects o ON o.id = t.object_id
+             FROM objects o
              LEFT JOIN projects p ON p.id = o.project_id
              WHERE o.is_deleted = 0
-               AND t.tag = ?1
+               AND (?1 IS NULL OR EXISTS (
+                   SELECT 1 FROM tags t WHERE t.object_id = o.id AND t.tag = ?1
+               ))
                AND (?2 IS NULL OR p.name = ?2)
+               AND (?3 IS NULL OR o.kind = ?3)
              ORDER BY o.is_noise ASC, o.modified_at DESC, o.title ASC
-             LIMIT ?3",
+             LIMIT ?4",
         )?;
-        let rows = stmt.query_map(params![tag_name, project_name, limit as i64], |row| {
+        let rows = stmt.query_map(params![tag_name, project_name, kind_filter, limit as i64], |row| {
             let kind_str: String = row.get(4)?;
             let is_noise: i64 = row.get(5)?;
             let kind = ObjectKind::from_db(&kind_str);
@@ -222,6 +279,12 @@ impl Store {
                 QueryIntent::Documentation
             } else {
                 QueryIntent::Code
+            };
+            let filter_label = match (tag_name, kind_filter) {
+                (Some(t), Some(k)) => format!("tag={t}, kind={k}"),
+                (Some(t), None) => format!("tag={t}"),
+                (None, Some(k)) => format!("kind={k}"),
+                (None, None) => "filter match".to_string(),
             };
             Ok(SearchHit {
                 object_id: row.get(0)?,
@@ -234,7 +297,7 @@ impl Store {
                 score: 1.0,
                 intent,
                 signals: vec![SearchSignal {
-                    label: format!("tag match ({tag_name})"),
+                    label: filter_label,
                     delta: 1.0,
                 }],
             })
@@ -248,6 +311,7 @@ impl Store {
         fts_query: &str,
         project_name: Option<&str>,
         tag_filter: Option<&str>,
+        kind_filter: Option<&str>,
         pool_limit: i64,
         stage: StageKind,
         intent: QueryIntent,
@@ -272,11 +336,14 @@ impl Store {
                    AND (?4 IS NULL OR EXISTS (
                        SELECT 1 FROM tags t WHERE t.object_id = o.id AND t.tag = ?4
                    ))
+                   AND (?5 IS NULL OR o.kind = ?5)
                  ORDER BY rank
                  LIMIT ?3",
             )?;
 
-            let rows = stmt.query_map(params![fts_query, project_name, pool_limit, tag_filter], |row| {
+            let rows = stmt.query_map(
+                params![fts_query, project_name, pool_limit, tag_filter, kind_filter],
+                |row| {
                 let kind_str: String = row.get(4)?;
                 let is_noise: i64 = row.get(5)?;
                 Ok((
@@ -357,11 +424,14 @@ impl Store {
                    AND (?4 IS NULL OR EXISTS (
                        SELECT 1 FROM tags t WHERE t.object_id = o.id AND t.tag = ?4
                    ))
+                   AND (?5 IS NULL OR o.kind = ?5)
                  ORDER BY rank
                  LIMIT ?3",
             )?;
 
-            let rows = stmt.query_map(params![fts_query, project_name, pool_limit, tag_filter], |row| {
+            let rows = stmt.query_map(
+                params![fts_query, project_name, pool_limit, tag_filter, kind_filter],
+                |row| {
                 let kind_str: String = row.get(4)?;
                 let is_noise: i64 = row.get(5)?;
                 Ok((
@@ -770,5 +840,67 @@ mod tests {
             .unwrap();
         assert_eq!(query_and_tag.len(), 1);
         assert_eq!(query_and_tag[0].title, "auth.rs");
+    }
+
+    #[test]
+    fn search_kind_filter_works_with_and_without_query() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("kindrepo", None, None).unwrap();
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(crate::UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/NOTES.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "NOTES.md".to_string(),
+                summary: Some("Scheduler overview".to_string()),
+                content_hash: "h_n".to_string(),
+                size_bytes: 50,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec!["Scheduler design doc.".to_string()],
+            })
+            .unwrap();
+        batch
+            .upsert_object(crate::UpsertObjectInput {
+                project_id: Some(proj.id),
+                path: "/repo/scheduler.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "scheduler.rs".to_string(),
+                summary: Some("pub fn run_scheduler()".to_string()),
+                content_hash: "h_c".to_string(),
+                size_bytes: 80,
+                modified_at: 200,
+                is_noise: false,
+                chunks: vec!["pub fn run_scheduler() {}".to_string()],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        let notes_only = store
+            .search_with_filters(
+                None,
+                SearchFilters {
+                    project: Some("kindrepo"),
+                    kind: Some(ObjectKind::Note),
+                    ..SearchFilters::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(notes_only.len(), 1);
+        assert_eq!(notes_only[0].title, "NOTES.md");
+
+        let code_query = store
+            .search_with_filters(
+                Some("scheduler"),
+                SearchFilters {
+                    project: Some("kindrepo"),
+                    kind: Some(ObjectKind::Code),
+                    ..SearchFilters::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(code_query.len(), 1);
+        assert_eq!(code_query[0].title, "scheduler.rs");
     }
 }

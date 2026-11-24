@@ -7,10 +7,10 @@ use anyhow::Result;
 use chrono::{DateTime, Local, NaiveDate, TimeZone};
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
-use vos_core::{GraphDirection, GraphTreeNode};
+use vos_core::{GraphDirection, GraphTreeNode, ObjectKind};
 use vos_core::util::now_unix;
 use vos_indexer::{IndexOptions, index_path_with_options};
-use vos_store::{Store, load_benchmark_cases};
+use vos_store::{SearchFilters, Store, load_benchmark_cases};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -56,9 +56,9 @@ enum Commands {
         #[arg(long)]
         no_ignore: bool,
     },
-    /// Full-text search across indexed objects and chunks (optionally filtered by --tag).
+    /// Full-text search across indexed objects and chunks (optionally filtered by --tag or --kind).
     Search {
-        /// Search query string (optional when --tag is specified).
+        /// Search query string (optional when --tag or --kind is specified).
         query: Option<String>,
         /// Restrict results to a specific project.
         #[arg(long)]
@@ -66,6 +66,9 @@ enum Commands {
         /// Filter results by attached tag (works alone or combined with query).
         #[arg(long)]
         tag: Option<String>,
+        /// Filter results by object kind (`code`, `note`, `doc`, `config`, `model`, `media`, `other`).
+        #[arg(long)]
+        kind: Option<CliObjectKind>,
         /// Maximum number of results to display.
         #[arg(long, default_value_t = 10)]
         limit: usize,
@@ -296,6 +299,31 @@ enum Commands {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliObjectKind {
+    Code,
+    Note,
+    Doc,
+    Config,
+    Model,
+    Media,
+    Other,
+}
+
+impl From<CliObjectKind> for ObjectKind {
+    fn from(value: CliObjectKind) -> Self {
+        match value {
+            CliObjectKind::Code => Self::Code,
+            CliObjectKind::Note => Self::Note,
+            CliObjectKind::Doc => Self::Doc,
+            CliObjectKind::Config => Self::Config,
+            CliObjectKind::Model => Self::Model,
+            CliObjectKind::Media => Self::Media,
+            CliObjectKind::Other => Self::Other,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
 enum CliGraphDirection {
     Out,
     In,
@@ -506,28 +534,33 @@ fn main() -> Result<()> {
             query,
             project,
             tag,
+            kind,
             limit,
             explain,
             include_internal,
         } => {
-            let hits = store.search_filtered(
+            let mapped_kind = kind.map(Into::into);
+            let hits = store.search_with_filters(
                 query.as_deref(),
-                project.as_deref(),
-                tag.as_deref(),
-                limit,
-                include_internal,
+                SearchFilters {
+                    project: project.as_deref(),
+                    tag: tag.as_deref(),
+                    kind: mapped_kind,
+                    limit,
+                    include_internal,
+                },
             )?;
             if json {
                 return print_json(&hits);
             }
             if hits.is_empty() {
-                let label = match (query.as_deref(), tag.as_deref()) {
-                    (Some(q), Some(t)) => format!("\"{q}\" with tag '{t}'"),
-                    (Some(q), None) => format!("\"{q}\""),
-                    (None, Some(t)) => format!("tag '{t}'"),
-                    (None, None) => "(empty)".to_string(),
-                };
-                println!("No matches found for {label}.");
+                let target = query
+                    .as_deref()
+                    .map(|q| format!("\"{q}\""))
+                    .or_else(|| tag.as_deref().map(|t| format!("tag '{t}'")))
+                    .or_else(|| mapped_kind.map(|k| format!("kind '{k}'")))
+                    .unwrap_or_else(|| "(empty)".to_string());
+                println!("No matches found for {target}.");
             } else {
                 for (idx, hit) in hits.iter().enumerate() {
                     let proj = hit.project_name.as_deref().unwrap_or("-");
