@@ -404,6 +404,12 @@ enum BenchmarkCommands {
         /// Persist this run into `benchmark_runs` for regression tracking.
         #[arg(long)]
         save: bool,
+        /// Fail with non-zero exit if Top-5 accuracy (%) falls below this threshold.
+        #[arg(long)]
+        min_top5: Option<f64>,
+        /// Fail with non-zero exit if MRR falls below this threshold.
+        #[arg(long)]
+        min_mrr: Option<f64>,
     },
     /// Show saved benchmark runs over time.
     History {
@@ -2162,7 +2168,12 @@ fn handle_session(store: &mut Store, action: SessionCommands, json: bool) -> Res
 #[inline(never)]
 fn handle_benchmark(store: &Store, action: BenchmarkCommands, json: bool) -> Result<()> {
     match action {
-        BenchmarkCommands::Search { config, save } => {
+        BenchmarkCommands::Search {
+            config,
+            save,
+            min_top5,
+            min_mrr,
+        } => {
             let cases = load_benchmark_cases(&config)?;
             let report = store.run_search_benchmark(&cases)?;
             let saved_run_id = if save {
@@ -2178,10 +2189,11 @@ fn handle_benchmark(store: &Store, action: BenchmarkCommands, json: bool) -> Res
                 None
             };
             if json {
-                return print_json(&JsonBenchmarkSaveResult {
+                print_json(&JsonBenchmarkSaveResult {
                     report: &report,
                     saved_run_id: saved_run_id.as_ref().map(|(id, _)| *id),
-                });
+                })?;
+                return check_benchmark_thresholds(&report, min_top5, min_mrr);
             }
 
             for case in &report.cases {
@@ -2270,6 +2282,7 @@ fn handle_benchmark(store: &Store, action: BenchmarkCommands, json: bool) -> Res
             if let Some((run_id, suite_name)) = saved_run_id {
                 println!("\nSaved benchmark run #{run_id} ({suite_name}).");
             }
+            check_benchmark_thresholds(&report, min_top5, min_mrr)?;
         }
         BenchmarkCommands::History { limit } => {
             let runs = store.list_benchmark_runs(limit)?;
@@ -2333,6 +2346,35 @@ fn handle_benchmark(store: &Store, action: BenchmarkCommands, json: bool) -> Res
                 }
             }
         }
+    }
+    Ok(())
+}
+
+fn check_benchmark_thresholds(
+    report: &vos_core::SearchBenchmarkReport,
+    min_top5: Option<f64>,
+    min_mrr: Option<f64>,
+) -> Result<()> {
+    if let Some(req_top5) = min_top5
+        && report.top5_total > 0
+    {
+        let actual_top5 = pct(report.top5_passed, report.top5_total);
+        if actual_top5 + f64::EPSILON < req_top5 {
+            anyhow::bail!(
+                "benchmark Top-5 {:.1}% fell below required --min-top5 {:.1}%",
+                actual_top5,
+                req_top5
+            );
+        }
+    }
+    if let Some(req_mrr) = min_mrr
+        && report.mrr + f64::EPSILON < req_mrr
+    {
+        anyhow::bail!(
+            "benchmark MRR {:.3} fell below required --min-mrr {:.3}",
+            report.mrr,
+            req_mrr
+        );
     }
     Ok(())
 }
@@ -2856,5 +2898,48 @@ mod tests {
                 "expected error for '{bad}'"
             );
         }
+    }
+
+    #[test]
+    fn benchmark_thresholds_accept_passing_metrics() {
+        let report = vos_core::SearchBenchmarkReport {
+            total_cases: 10,
+            top1_passed: 2,
+            top1_total: 2,
+            top3_passed: 5,
+            top3_total: 5,
+            top5_passed: 9,
+            top5_total: 10,
+            mrr: 0.85,
+            noise_hits: 0,
+            total_returned_hits: 40,
+            cross_project_matched: 2,
+            cross_project_total: 2,
+            categories: Vec::new(),
+            cases: Vec::new(),
+        };
+        assert!(check_benchmark_thresholds(&report, Some(90.0), Some(0.85)).is_ok());
+    }
+
+    #[test]
+    fn benchmark_thresholds_reject_failing_top5_or_mrr() {
+        let report = vos_core::SearchBenchmarkReport {
+            total_cases: 10,
+            top1_passed: 1,
+            top1_total: 2,
+            top3_passed: 4,
+            top3_total: 5,
+            top5_passed: 8,
+            top5_total: 10,
+            mrr: 0.72,
+            noise_hits: 0,
+            total_returned_hits: 40,
+            cross_project_matched: 2,
+            cross_project_total: 2,
+            categories: Vec::new(),
+            cases: Vec::new(),
+        };
+        assert!(check_benchmark_thresholds(&report, Some(85.0), None).is_err());
+        assert!(check_benchmark_thresholds(&report, None, Some(0.75)).is_err());
     }
 }

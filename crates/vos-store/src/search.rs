@@ -188,6 +188,7 @@ impl Store {
                 project_name,
                 kind_str,
                 since_ts,
+                include_internal,
                 requested_limit,
             );
         };
@@ -318,8 +319,10 @@ impl Store {
         project_name: Option<&str>,
         kind_filter: Option<&str>,
         since: Option<i64>,
+        include_internal: bool,
         limit: usize,
     ) -> Result<Vec<SearchHit>, StoreError> {
+        let pool_limit = (limit * 4).max(60) as i64;
         let mut stmt = self.conn.prepare(
             "SELECT o.id, p.name, o.title, o.path, o.kind, o.is_noise, COALESCE(o.summary, '')
              FROM objects o
@@ -335,48 +338,71 @@ impl Store {
              LIMIT ?4",
         )?;
         let rows = stmt.query_map(
-            params![tag_name, project_name, kind_filter, limit as i64, since],
+            params![tag_name, project_name, kind_filter, pool_limit, since],
             |row| {
-            let kind_str: String = row.get(4)?;
-            let is_noise: i64 = row.get(5)?;
-            let kind = ObjectKind::from_db(&kind_str);
-            let intent = if matches!(kind, ObjectKind::Note | ObjectKind::Doc) {
-                QueryIntent::Documentation
-            } else {
-                QueryIntent::Code
-            };
-            let mut label_parts = Vec::new();
-            if let Some(t) = tag_name {
-                label_parts.push(format!("tag={t}"));
-            }
-            if let Some(k) = kind_filter {
-                label_parts.push(format!("kind={k}"));
-            }
-            if since.is_some() {
-                label_parts.push("since".to_string());
-            }
-            let filter_label = if label_parts.is_empty() {
-                "filter match".to_string()
-            } else {
-                label_parts.join(", ")
-            };
-            Ok(SearchHit {
-                object_id: row.get(0)?,
-                project_name: row.get(1)?,
-                title: row.get(2)?,
-                path: row.get(3)?,
-                kind,
-                is_noise: is_noise != 0,
-                snippet: row.get(6)?,
-                score: 1.0,
-                intent,
-                signals: vec![SearchSignal {
+                let path: String = row.get(3)?;
+                let kind_str: String = row.get(4)?;
+                let is_noise_flag = row.get::<_, i64>(5)? != 0;
+                let kind = ObjectKind::from_db(&kind_str);
+                let intent = if matches!(kind, ObjectKind::Note | ObjectKind::Doc) {
+                    QueryIntent::Documentation
+                } else {
+                    QueryIntent::Code
+                };
+                let mut label_parts = Vec::new();
+                if let Some(t) = tag_name {
+                    label_parts.push(format!("tag={t}"));
+                }
+                if let Some(k) = kind_filter {
+                    label_parts.push(format!("kind={k}"));
+                }
+                if since.is_some() {
+                    label_parts.push("since".to_string());
+                }
+                let filter_label = if label_parts.is_empty() {
+                    "filter match".to_string()
+                } else {
+                    label_parts.join(", ")
+                };
+
+                let mut score = 1.0_f64;
+                let mut signals = vec![SearchSignal {
                     label: filter_label,
                     delta: 1.0,
-                }],
-            })
-        })?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+                }];
+                if is_noise_flag {
+                    score += NOISE_PENALTY;
+                    signals.push(SearchSignal {
+                        label: "noise penalty".to_string(),
+                        delta: NOISE_PENALTY,
+                    });
+                }
+                if !include_internal && search_visibility(Path::new(&path)) == SearchVisibility::Internal {
+                    score += INTERNAL_ARTIFACT_PENALTY;
+                    signals.push(SearchSignal {
+                        label: "internal artifact penalty".to_string(),
+                        delta: INTERNAL_ARTIFACT_PENALTY,
+                    });
+                }
+
+                Ok(SearchHit {
+                    object_id: row.get(0)?,
+                    project_name: row.get(1)?,
+                    title: row.get(2)?,
+                    path,
+                    kind,
+                    is_noise: is_noise_flag,
+                    snippet: row.get(6)?,
+                    score,
+                    intent,
+                    signals,
+                })
+            },
+        )?;
+        let mut hits = rows.collect::<Result<Vec<_>, _>>()?;
+        hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+        hits.truncate(limit);
+        Ok(hits)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1152,5 +1178,67 @@ mod tests {
             .unwrap();
         assert_eq!(meta_recent.len(), 1);
         assert_eq!(meta_recent[0].title, "new_sched.rs");
+    }
+
+    #[test]
+    fn filter_only_search_respects_include_internal_visibility() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("visfilt", None, None).unwrap();
+
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(crate::UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/repo/config/concepts.yaml".to_string(),
+                kind: ObjectKind::Config,
+                title: "concepts.yaml".to_string(),
+                summary: None,
+                content_hash: "h_int".to_string(),
+                size_bytes: 50,
+                modified_at: 2_000,
+                is_noise: false,
+                chunks: vec!["internal: [yes]".to_string()],
+            })
+            .unwrap();
+        batch
+            .upsert_object(crate::UpsertObjectInput {
+                project_id: Some(proj.id),
+                path: "/repo/Cargo.toml".to_string(),
+                kind: ObjectKind::Config,
+                title: "Cargo.toml".to_string(),
+                summary: None,
+                content_hash: "h_norm".to_string(),
+                size_bytes: 50,
+                modified_at: 1_000,
+                is_noise: false,
+                chunks: vec!["[package]".to_string()],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        let default_hits = store
+            .search_with_filters(
+                None,
+                SearchFilters {
+                    project: Some("visfilt"),
+                    kind: Some(ObjectKind::Config),
+                    ..SearchFilters::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(default_hits[0].title, "Cargo.toml");
+
+        let include_hits = store
+            .search_with_filters(
+                None,
+                SearchFilters {
+                    project: Some("visfilt"),
+                    kind: Some(ObjectKind::Config),
+                    include_internal: true,
+                    ..SearchFilters::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(include_hits[0].title, "concepts.yaml");
     }
 }

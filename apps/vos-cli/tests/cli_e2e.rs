@@ -825,3 +825,55 @@ fn cli_search_since_filters_recent_and_supports_filter_only_mode() {
 
     assert!(!run_vos(&db, &["search", "--since", "invalid-date"]).0);
 }
+
+#[test]
+fn cli_benchmark_search_thresholds_pass_and_fail_cleanly() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("benchproj");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("src").join("scheduler.rs"), "pub fn tick_scheduler() {}\n").unwrap();
+
+    let cfg = tmp.path().join("suite.yaml");
+    fs::write(
+        &cfg,
+        "- query: scheduler\n  category: Code\n  expected_top5: [src/scheduler.rs]\n",
+    )
+    .unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "benchproj", proj.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", "--all"]);
+
+    let pass_json = assert_vos_ok(
+        &db,
+        &[
+            "benchmark",
+            "search",
+            "--config",
+            cfg.to_str().unwrap(),
+            "--min-top5",
+            "100",
+            "--min-mrr",
+            "0.9",
+            "--json",
+        ],
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&pass_json).expect("bench json");
+    assert_eq!(parsed["top5_passed"], 1);
+
+    let (ok, stdout, stderr) = run_vos(
+        &db,
+        &[
+            "benchmark",
+            "search",
+            "--config",
+            cfg.to_str().unwrap(),
+            "--min-mrr",
+            "1.1",
+            "--json",
+        ],
+    );
+    assert!(!ok);
+    assert!(stdout.contains("\"top5_passed\": 1"));
+    assert!(stderr.contains("--min-mrr"));
+}
