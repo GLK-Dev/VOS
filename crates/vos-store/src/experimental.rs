@@ -30,14 +30,25 @@ pub(crate) fn predict_from_status_at(status: &ProjectStatus, now: i64) -> Recove
     score += inactivity_pts;
     factors.push(inactivity_label);
 
-    let cov_pts = match status.documentation_health {
-        DocumentationHealth::Good => 0,
-        DocumentationHealth::Partial => 1,
-        DocumentationHealth::Low => 3,
-        DocumentationHealth::Empty => 5,
+    let base_cov_pts: f64 = match status.documentation_health {
+        DocumentationHealth::Good => 0.0,
+        DocumentationHealth::Partial => 1.0,
+        DocumentationHealth::Low => 3.0,
+        DocumentationHealth::Empty => 5.0,
     };
+    let size_factor: f64 = if status.active_objects < 20 {
+        0.25
+    } else if status.active_objects < 100 {
+        0.75
+    } else {
+        1.0
+    };
+    let cov_pts = (base_cov_pts * size_factor).round() as usize;
     score += cov_pts;
-    factors.push(format!("Coverage {} (+{cov_pts})", status.documentation_health));
+    factors.push(format!(
+        "Coverage {} x{size_factor:.2} (+{cov_pts})",
+        status.documentation_health
+    ));
 
     let risk_pts = status.critical_risk_count * 2;
     score += risk_pts;
@@ -143,5 +154,11 @@ mod tests {
         assert_eq!(hard.difficulty, RecoveryDifficulty::Hard);
         assert_eq!(hard.score, 4 + 1 + 4 + 3 + 1);
         assert!(hard.factors.iter().any(|f| f.contains("Dormant 94 days")));
+
+        // Micro-repo (<20 files) with Empty coverage scales down (`5 * 0.25 -> 1`).
+        let (micro_st, _) = synthetic_status(Some(15), DocumentationHealth::Empty, 0, 0, 2);
+        let micro = predict_from_status_at(&micro_st, now);
+        assert_eq!(micro.difficulty, RecoveryDifficulty::Easy);
+        assert_eq!(micro.score, 2 + 1);
     }
 }
