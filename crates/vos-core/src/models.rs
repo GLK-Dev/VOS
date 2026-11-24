@@ -903,6 +903,8 @@ pub struct SessionStats {
     pub missed_difficulty: usize,
     /// Completed `Easy`-predicted sessions with a recorded duration or quality.
     pub easy_scored_sessions: usize,
+    /// Completed sessions with both duration and recovery quality (benchmark-ready data points).
+    pub scored_sessions: usize,
 }
 
 /// Experimental structural centrality metrics for a node in the dependency graph.

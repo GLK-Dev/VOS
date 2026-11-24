@@ -361,9 +361,9 @@ struct SessionLogArgs {
     /// First command used during recovery (for --log).
     #[arg(long, default_value = "-")]
     first_command: String,
-    /// Days the project was paused (for --log).
-    #[arg(long, default_value = "-")]
-    days_away: String,
+    /// Days the project was paused (for --log); computed automatically when omitted.
+    #[arg(long)]
+    days_away: Option<String>,
     /// Helpful signals, comma-separated (for --log).
     #[arg(long, default_value = "-")]
     helpful: String,
@@ -2220,10 +2220,16 @@ fn handle_session(store: &mut Store, action: SessionCommands, json: bool) -> Res
             let s = store.stop_session(project.as_deref(), quality, note.as_deref())?;
             if let Some(log_path) = log_opts.log.as_deref() {
                 let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+                let days_away = match log_opts.days_away.clone() {
+                    Some(v) => v,
+                    None => store
+                        .session_days_away(&s)?
+                        .map_or_else(|| "-".to_string(), |d| d.to_string()),
+                };
                 let row = vos_store::format_recovery_log_row(
                     &s,
                     &date,
-                    &log_opts.days_away,
+                    &days_away,
                     &log_opts.first_command,
                     &log_opts.helpful,
                     &log_opts.ignored,
@@ -2315,6 +2321,10 @@ fn handle_session(store: &mut Store, action: SessionCommands, json: bool) -> Res
                     println!("  - {area} ({cnt} sessions)");
                 }
             }
+            println!(
+                "\nBenchmark progress: {} / {} scored sessions (v1.1 semantic-layer gate: 20-30)",
+                stats.scored_sessions, RECOVERY_GATE_SESSIONS
+            );
             if !stats.by_predicted_difficulty.is_empty() {
                 println!("\nPredicted vs Actual:");
                 for row in &stats.by_predicted_difficulty {
@@ -2350,6 +2360,8 @@ fn handle_session(store: &mut Store, action: SessionCommands, json: bool) -> Res
 }
 
 /// Appends one markdown table row, starting a new line if the file lacks a trailing newline.
+const RECOVERY_GATE_SESSIONS: usize = 20;
+
 fn append_log_row(path: &std::path::Path, row: &str) -> Result<()> {
     use std::io::Write;
     let needs_newline = std::fs::read(path)

@@ -384,6 +384,25 @@ impl Store {
     }
 
     /// Loads a single work session by ID.
+    /// Whole days the project was untouched before the session started.
+    ///
+    /// Uses the latest non-noise object modification (or previous session end) that
+    /// happened before `started_at`. Returns `None` when there is no earlier activity.
+    pub fn session_days_away(&self, session: &WorkSession) -> Result<Option<i64>, StoreError> {
+        let last: Option<i64> = self.conn.query_row(
+            "SELECT MAX(t) FROM (
+                SELECT MAX(modified_at) AS t FROM objects
+                 WHERE project_id = ?1 AND is_noise = 0 AND modified_at < ?2
+                UNION ALL
+                SELECT MAX(ended_at) FROM work_sessions
+                 WHERE project_id = ?1 AND id != ?3 AND ended_at IS NOT NULL AND ended_at < ?2
+             )",
+            params![session.project_id, session.started_at, session.id],
+            |row| row.get(0),
+        )?;
+        Ok(last.map(|t| (session.started_at - t).max(0) / 86_400))
+    }
+
     pub fn get_session(&self, session_id: &str) -> Result<WorkSession, StoreError> {
         self.conn
             .query_row(
@@ -505,6 +524,12 @@ impl Store {
         let mut hard_scored_sessions = 0;
         let mut missed_difficulty = 0;
         let mut easy_scored_sessions = 0;
+        let scored_sessions = sessions
+            .iter()
+            .filter(|s| {
+                s.ended_at.is_some() && s.duration_secs.is_some() && s.recovery_quality.is_some()
+            })
+            .count();
         for s in sessions.iter().filter(|s| s.ended_at.is_some()) {
             match s.predicted_difficulty {
                 RecoveryDifficulty::Hard
@@ -538,6 +563,7 @@ impl Store {
             hard_scored_sessions,
             missed_difficulty,
             easy_scored_sessions,
+            scored_sessions,
         })
     }
 }
@@ -773,6 +799,38 @@ mod tests {
         let stats = store.session_stats(Some("demo")).unwrap();
         assert_eq!(stats.completed_sessions, 1);
         assert_eq!(stats.avg_quality, Some(5.0));
+        assert_eq!(stats.scored_sessions, 1);
+    }
+
+    #[test]
+    fn session_days_away_uses_last_activity_before_start() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("away", None, None).unwrap();
+        let now = now_unix();
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "a.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "a.md".to_string(),
+                summary: None,
+                content_hash: "h".to_string(),
+                size_bytes: 1,
+                modified_at: now - 5 * 86_400 - 100,
+                is_noise: false,
+                chunks: vec!["x".to_string()],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        let sess = store.start_session("away", None).unwrap();
+        assert_eq!(store.session_days_away(&sess).unwrap(), Some(5));
+
+        let empty = store.create_project("fresh", None, None).unwrap();
+        let _ = empty;
+        let fresh = store.start_session("fresh", None).unwrap();
+        assert_eq!(store.session_days_away(&fresh).unwrap(), None);
     }
 
     #[test]
