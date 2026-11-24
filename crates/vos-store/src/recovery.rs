@@ -295,46 +295,7 @@ impl Store {
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
-        // Deterministically surface explicit open-question / TODO markers from project notes.
-        let mut q_stmt = self.conn.prepare(
-            "SELECT o.title, c.text
-             FROM chunks c
-             JOIN objects o ON o.id = c.object_id
-             WHERE o.project_id = ?1
-               AND o.is_deleted = 0
-               AND o.is_noise = 0
-               AND o.kind = 'note'
-             ORDER BY o.modified_at DESC, c.chunk_index ASC
-             LIMIT 80",
-        )?;
-        let note_chunks = q_stmt
-            .query_map(params![resume.project.id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let mut open_questions = Vec::new();
-        for (title, text) in note_chunks {
-            for line in text.lines() {
-                let trimmed = line.trim().trim_start_matches(['-', '*', '>', ' ']);
-                let lower = trimmed.to_lowercase();
-                if lower.starts_with("open question:")
-                    || lower.starts_with("todo:")
-                    || lower.starts_with("fixme:")
-                {
-                    let entry = format!("{title}: {trimmed}");
-                    if !open_questions.contains(&entry) {
-                        open_questions.push(entry);
-                    }
-                    if open_questions.len() >= 5 {
-                        break;
-                    }
-                }
-            }
-            if open_questions.len() >= 5 {
-                break;
-            }
-        }
+        let (open_questions, _) = self.scan_project_markers(&project_id)?;
 
         Ok(ProjectStart {
             resume,
@@ -1252,5 +1213,40 @@ mod tests {
         assert!(done_sess.ended_at.is_some());
         assert_eq!(done_sess.recovery_quality, Some(5));
         assert_eq!(done_sess.stop_note.as_deref(), Some("Next: wire continue tests"));
+    }
+
+    #[test]
+    fn project_start_and_continue_align_open_questions_with_status() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("aligned", None, None).unwrap();
+        let now = now_unix();
+
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/aligned/ROADMAP.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "ROADMAP.md".to_string(),
+                summary: None,
+                content_hash: "h_align".to_string(),
+                size_bytes: 160,
+                modified_at: now - 30,
+                is_noise: false,
+                chunks: vec![
+                    "```md\nOPEN QUESTION: ignored example?\n```\n- [ ] Task item\nTODO: not a question\nOPEN QUESTION: keep WAL?"
+                        .to_string(),
+                ],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        let start = store.project_start("aligned").unwrap();
+        let cont = store.project_continue("aligned").unwrap();
+        let status = store.project_status("aligned").unwrap();
+
+        assert_eq!(start.open_questions, vec!["ROADMAP.md: OPEN QUESTION: keep WAL?"]);
+        assert_eq!(cont.open_questions, start.open_questions);
+        assert_eq!(status.open_questions, start.open_questions);
     }
 }

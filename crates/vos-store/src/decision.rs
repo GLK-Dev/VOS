@@ -332,7 +332,7 @@ impl Store {
         project_id: &str,
     ) -> Result<(Vec<String>, Vec<String>), StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT o.title, c.text
+            "SELECT o.id, o.title, c.text
              FROM chunks c
              JOIN objects o ON o.id = c.object_id
              WHERE o.project_id = ?1
@@ -345,23 +345,42 @@ impl Store {
                  ELSE 1
                END,
                o.modified_at DESC,
+               o.id ASC,
                c.chunk_index ASC
              LIMIT 120",
         )?;
 
         let rows = stmt
             .query_map(params![project_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
         let mut open_questions = Vec::new();
         let mut pending_work = Vec::new();
         let mut seen_pending = HashSet::new();
+        let mut current_obj_id = String::new();
+        let mut active_fence: Option<char> = None;
 
-        for (title, text) in rows {
+        for (obj_id, title, text) in rows {
+            if obj_id != current_obj_id {
+                current_obj_id = obj_id;
+                active_fence = None;
+            }
             for raw_line in text.lines() {
                 let trimmed = raw_line.trim();
+                if let Some(next_fence) = update_fence_state(trimmed, active_fence) {
+                    active_fence = next_fence;
+                    continue;
+                }
+                if active_fence.is_some() {
+                    continue;
+                }
+
                 let cleaned = trimmed
                     .trim_start_matches(['-', '*', '>', ' '])
                     .trim();
@@ -516,6 +535,31 @@ fn clean_snippet(raw: &str) -> String {
     raw.replace(['[', ']'], "").replace('\n', " ")
 }
 
+fn update_fence_state(trimmed: &str, current: Option<char>) -> Option<Option<char>> {
+    let fence_char = if trimmed.starts_with("```") {
+        '`'
+    } else if trimmed.starts_with("~~~") {
+        '~'
+    } else {
+        return None;
+    };
+
+    match current {
+        Some(active) if active == fence_char && trimmed.chars().all(|c| c == active) => Some(None),
+        Some(_) => None,
+        None => {
+            let after = trimmed.trim_start_matches(fence_char).trim_end();
+            let same_line_close = (fence_char == '`' && after.ends_with("```"))
+                || (fence_char == '~' && after.ends_with("~~~"));
+            if same_line_close {
+                None
+            } else {
+                Some(Some(fence_char))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use vos_core::util::now_unix;
@@ -589,6 +633,37 @@ mod tests {
         let diff = store.changed_since(now - 86_400, "yesterday", Some("demo")).unwrap();
         assert_eq!(diff.added.len(), 1);
         assert_eq!(diff.added[0].title, "context.rs");
+    }
+
+    #[test]
+    fn scan_project_markers_ignores_fenced_code_blocks_across_chunks() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("fence", None, None).unwrap();
+        let now = now_unix();
+
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "/fence/docs/guide.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "guide.md".to_string(),
+                summary: None,
+                content_hash: "h_guide".to_string(),
+                size_bytes: 200,
+                modified_at: now - 60,
+                is_noise: false,
+                chunks: vec![
+                    "```md\n- [ ] Fake fenced task\nOPEN QUESTION: fake fenced question?\n".to_string(),
+                    "TODO: still inside fence\n```\n- [ ] Real task after fence\nOPEN QUESTION: real question?".to_string(),
+                ],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        let (questions, pending) = store.scan_project_markers(&proj.id).unwrap();
+        assert_eq!(questions, vec!["guide.md: OPEN QUESTION: real question?"]);
+        assert_eq!(pending, vec!["guide.md: Real task after fence"]);
     }
 }
 
