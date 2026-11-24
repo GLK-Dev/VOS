@@ -161,8 +161,11 @@ enum Commands {
     },
     /// Detect documentation drift and roadmap-vs-implementation drift.
     Drift {
-        /// Project name.
-        project: String,
+        /// Project name (required unless --all is specified).
+        project: Option<String>,
+        /// Audit drift across all registered projects.
+        #[arg(long)]
+        all: bool,
     },
     /// Decision-support health, pending work, and risk summary for a project (or all projects with --all).
     Status {
@@ -898,23 +901,7 @@ fn main() -> Result<()> {
                 evo.open_questions_count, evo.pending_work_count
             );
         }
-        Commands::Drift { project } => {
-            let drift = store.project_drift(&project)?;
-            if json {
-                return print_json(&drift);
-            }
-            println!("Drift report: {}", drift.project.name);
-            if drift.findings.is_empty() {
-                println!("  No documentation or roadmap drift detected.");
-            } else {
-                for finding in &drift.findings {
-                    println!("\n[{}] {}", finding.kind, finding.summary);
-                    for ev in &finding.evidence {
-                        println!("  - {ev}");
-                    }
-                }
-            }
-        }
+        Commands::Drift { project, all } => handle_drift(&store, project, all, json)?,
         Commands::Status { project, all } => {
             if all {
                 let rows = collect_all_statuses(&store, experimental)?;
@@ -1724,74 +1711,7 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Snapshot {
-            project,
-            all,
-            label,
-        } => {
-            if all && project.is_some() {
-                anyhow::bail!("pass either a project name or --all, not both");
-            }
-            if all {
-                let snaps = store.save_all_snapshots(label.as_deref())?;
-                if json {
-                    return print_json(&snaps);
-                }
-                if snaps.is_empty() {
-                    println!("No projects registered.");
-                } else {
-                    for s in &snaps {
-                        let lbl = s
-                            .label
-                            .as_deref()
-                            .map(|l| format!(" [{l}]"))
-                            .unwrap_or_default();
-                        println!(
-                            "#{:<3} | {:<12} | {} | files: {} | rels: {} | cov: {:.1}% | crit: {} high: {}{}",
-                            s.id,
-                            s.project_name,
-                            s.health,
-                            s.active_objects,
-                            s.relations_count,
-                            s.coverage_ratio,
-                            s.critical_risks,
-                            s.high_risks,
-                            lbl
-                        );
-                    }
-                    println!("Saved {} snapshot(s).", snaps.len());
-                }
-                return Ok(());
-            }
-            let project = project
-                .ok_or_else(|| anyhow::anyhow!("provide a project name or pass --all"))?;
-            let snap = store.save_snapshot(&project, label.as_deref())?;
-            if json {
-                return print_json(&snap);
-            }
-            let lbl = snap
-                .label
-                .as_deref()
-                .map(|l| format!(" [{l}]"))
-                .unwrap_or_default();
-            println!(
-                "Saved snapshot #{}{} for '{}' at {}",
-                snap.id,
-                lbl,
-                snap.project_name,
-                format_ts(snap.created_at)
-            );
-            println!(
-                "  Health: {} | Files: {} | Relations: {} | Coverage: {:.1}% ({}) | Crit: {} | High: {}",
-                snap.health,
-                snap.active_objects,
-                snap.relations_count,
-                snap.coverage_ratio,
-                snap.documentation_health,
-                snap.critical_risks,
-                snap.high_risks
-            );
-        }
+        Commands::Snapshot { project, all, label } => handle_snapshot(&store, project, all, label, json)?,
         Commands::Snapshots { project, limit } => {
             let snaps = store.list_snapshots(project.as_deref(), limit)?;
             if json {
@@ -1895,156 +1815,7 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Session { action } => match action {
-            SessionCommands::Start {
-                project,
-                note,
-                no_index,
-            } => {
-                if !no_index {
-                    refresh_project_index_if_present(&mut store, &project)?;
-                }
-                let s = store.start_session(&project, note.as_deref())?;
-                if json {
-                    return print_json(&s);
-                }
-                println!(
-                    "Started session {} for '{}' at {}",
-                    s.id,
-                    s.project_name,
-                    format_ts(s.started_at)
-                );
-                println!(
-                    "  Predicted Difficulty: {} (score: {})",
-                    s.predicted_difficulty, s.predicted_score
-                );
-                if let Some(ref rp) = s.return_point {
-                    println!("  Suggested return point: {rp}");
-                }
-            }
-            SessionCommands::Stop {
-                project,
-                quality,
-                note,
-                no_index,
-            } => {
-                if !no_index {
-                    let target_project = match project.as_deref() {
-                        Some(name) => Some(name.to_string()),
-                        None => store
-                            .list_sessions(None, 20)?
-                            .into_iter()
-                            .find(|s| s.ended_at.is_none())
-                            .map(|s| s.project_name),
-                    };
-                    if let Some(proj_name) = target_project {
-                        refresh_project_index_if_present(&mut store, &proj_name)?;
-                    }
-                }
-                let s = store.stop_session(project.as_deref(), quality, note.as_deref())?;
-                if json {
-                    return print_json(&s);
-                }
-                let dur = s.duration_secs.unwrap_or(0);
-                println!(
-                    "Stopped session {} for '{}' (duration: {}s)",
-                    s.id, s.project_name, dur
-                );
-                println!(
-                    "  Predicted: {} (score: {}) | Actual Quality: {}",
-                    s.predicted_difficulty,
-                    s.predicted_score,
-                    s.recovery_quality
-                        .map(|q| format!("{q}/5"))
-                        .unwrap_or_else(|| "-".to_string())
-                );
-                println!("  Files touched: {}", s.files_changed_count);
-                if !s.productive_areas.is_empty() {
-                    println!("  Productive areas: {}", s.productive_areas.join(", "));
-                }
-            }
-            SessionCommands::List { project, limit } => {
-                let sessions = store.list_sessions(project.as_deref(), limit)?;
-                if json {
-                    return print_json(&sessions);
-                }
-                if sessions.is_empty() {
-                    println!("No work sessions recorded.");
-                } else {
-                    for s in sessions {
-                        let status = match s.duration_secs {
-                            Some(d) => format!("{d}s"),
-                            None => "active".to_string(),
-                        };
-                        let qual = s
-                            .recovery_quality
-                            .map(|q| format!("{q}/5"))
-                            .unwrap_or_else(|| "-".to_string());
-                        println!(
-                            "{} | {:<12} | {} | {:<8} | pred: {:<6} | qual: {} | files: {} | return: {}",
-                            s.id,
-                            s.project_name,
-                            format_ts(s.started_at),
-                            status,
-                            s.predicted_difficulty,
-                            qual,
-                            s.files_changed_count,
-                            s.return_point.as_deref().unwrap_or("-")
-                        );
-                    }
-                }
-            }
-            SessionCommands::Stats { project } => {
-                let stats = store.session_stats(project.as_deref())?;
-                if json {
-                    return print_json(&stats);
-                }
-                let scope = stats.project_name.as_deref().unwrap_or("all projects");
-                println!(
-                    "Session Stats ({}): total={} completed={} active={}",
-                    scope, stats.total_sessions, stats.completed_sessions, stats.active_sessions
-                );
-                if let Some(med) = stats.median_duration_secs {
-                    println!(
-                        "  Duration: median {}s | mean {}s",
-                        med,
-                        stats.avg_duration_secs.unwrap_or(med)
-                    );
-                }
-                if let Some(avg_q) = stats.avg_quality {
-                    println!("  Mean Recovery Quality: {:.2} / 5.0", avg_q);
-                }
-                if !stats.frequent_return_points.is_empty() {
-                    println!("\nMost frequent return points:");
-                    for (rp, cnt) in &stats.frequent_return_points {
-                        println!("  - {rp} ({cnt}x)");
-                    }
-                }
-                if !stats.most_productive_areas.is_empty() {
-                    println!("\nMost productive areas:");
-                    for (area, cnt) in &stats.most_productive_areas {
-                        println!("  - {area} ({cnt} sessions)");
-                    }
-                }
-                if !stats.by_predicted_difficulty.is_empty() {
-                    println!("\nPredicted vs Actual:");
-                    for row in &stats.by_predicted_difficulty {
-                        let avg_d = row
-                            .avg_duration_secs
-                            .map(|d| format!("{d}s"))
-                            .unwrap_or_else(|| "-".to_string());
-                        let avg_q = row
-                            .avg_quality
-                            .map(|q| format!("{q:.1}/5"))
-                            .unwrap_or_else(|| "-".to_string());
-                        println!(
-                            "  - {:<6} | sessions: {} | avg duration: {} | avg quality: {}",
-                            row.difficulty, row.sessions, avg_d, avg_q
-                        );
-                    }
-                }
-            }
-        },
+        Commands::Session { action } => handle_session(&mut store, action, json)?,
         Commands::Doctor { repair } => {
             let report = store.doctor(repair)?;
             if json {
@@ -2076,181 +1847,459 @@ fn main() -> Result<()> {
                 println!("  Repair applied:      FTS5 rebuilt & stale deleted relations pruned");
             }
         }
-        Commands::Benchmark { action } => match action {
-            BenchmarkCommands::Search { config, save } => {
-                let cases = load_benchmark_cases(&config)?;
-                let report = store.run_search_benchmark(&cases)?;
-                let saved_run_id = if save {
-                    let suite_name = config
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| config.display().to_string());
-                    Some((
-                        store.save_benchmark_run(&suite_name, &report)?,
-                        suite_name,
-                    ))
-                } else {
-                    None
-                };
-                if json {
-                    return print_json(&JsonBenchmarkSaveResult {
-                        report: &report,
-                        saved_run_id: saved_run_id.as_ref().map(|(id, _)| *id),
-                    });
-                }
-
-                for case in &report.cases {
-                    let t1 = case.top1_hit.map(fmt_hit).unwrap_or("-");
-                    let t3 = case.top3_hit.map(fmt_hit).unwrap_or("-");
-                    let t5 = case.top5_hit.map(fmt_hit).unwrap_or("-");
-                    let cp = if case.cross_project_total > 0 {
-                        format!(" | proj: {}/{}", case.cross_project_matched, case.cross_project_total)
-                    } else {
-                        String::new()
-                    };
-                    println!(
-                        "[{:15}] {:24} | T1:{:4} T3:{:4} T5:{:4}{}",
-                        case.category, case.query, t1, t3, t5, cp
-                    );
-                    let failed_file = case.top1_hit == Some(false)
-                        || case.top3_hit == Some(false)
-                        || case.top5_hit == Some(false);
-                    let failed_proj = case.cross_project_matched < case.cross_project_total;
-                    if failed_file || failed_proj {
-                        println!("  actual: {}", case.actual_top5.join(", "));
-                    }
-                }
-
-                println!("\nBenchmark Results (Queries: {}):", report.total_cases);
-                if report.top1_total > 0 {
-                    println!(
-                        "  Top-1: {}/{} ({:.1}%)",
-                        report.top1_passed,
-                        report.top1_total,
-                        pct(report.top1_passed, report.top1_total)
-                    );
-                }
-                if report.top3_total > 0 {
-                    println!(
-                        "  Top-3: {}/{} ({:.1}%)",
-                        report.top3_passed,
-                        report.top3_total,
-                        pct(report.top3_passed, report.top3_total)
-                    );
-                }
-                if report.top5_total > 0 {
-                    println!(
-                        "  Top-5: {}/{} ({:.1}%)",
-                        report.top5_passed,
-                        report.top5_total,
-                        pct(report.top5_passed, report.top5_total)
-                    );
-                }
-                println!("  MRR:   {:.3}", report.mrr);
-                println!(
-                    "  Noise Hits: {} / {} ({:.1}%)",
-                    report.noise_hits,
-                    report.total_returned_hits,
-                    pct(report.noise_hits, report.total_returned_hits)
-                );
-                if report.cross_project_total > 0 {
-                    println!(
-                        "  Cross-Project Recall: {}/{} ({:.1}%)",
-                        report.cross_project_matched,
-                        report.cross_project_total,
-                        pct(report.cross_project_matched, report.cross_project_total)
-                    );
-                }
-
-                if report.categories.len() > 1 {
-                    println!("\nBy Category:");
-                    for cat in &report.categories {
-                        let t3_str = if cat.top3_total > 0 {
-                            format!("{}/{}", cat.top3_passed, cat.top3_total)
-                        } else {
-                            "-".to_string()
-                        };
-                        let t5_str = if cat.top5_total > 0 {
-                            format!("{}/{}", cat.top5_passed, cat.top5_total)
-                        } else {
-                            "-".to_string()
-                        };
-                        println!(
-                            "  {:18} | cases: {:2} | Top-3: {:5} | Top-5: {:5}",
-                            cat.category, cat.cases, t3_str, t5_str
-                        );
-                    }
-                }
-
-                if let Some((run_id, suite_name)) = saved_run_id {
-                    println!("\nSaved benchmark run #{run_id} ({suite_name}).");
-                }
-            }
-            BenchmarkCommands::History { limit } => {
-                let runs = store.list_benchmark_runs(limit)?;
-                if json {
-                    return print_json(&runs);
-                }
-                if runs.is_empty() {
-                    println!("No benchmark runs saved yet. Run `vos benchmark search --save`.");
-                } else {
-                    for (idx, run) in runs.iter().enumerate() {
-                        let prev = runs[idx + 1..]
-                            .iter()
-                            .find(|r| r.suite_name == run.suite_name);
-
-                        let t1 = if run.top1_total > 0 {
-                            format!("{:.1}%", pct(run.top1_passed, run.top1_total))
-                        } else {
-                            "-".to_string()
-                        };
-                        let t3 = if run.top3_total > 0 {
-                            format!("{:.1}%", pct(run.top3_passed, run.top3_total))
-                        } else {
-                            "-".to_string()
-                        };
-                        let t5_val = pct(run.top5_passed, run.top5_total);
-                        let t5_delta = prev
-                            .filter(|p| p.top5_total > 0 && run.top5_total > 0)
-                            .map(|p| {
-                                let d = t5_val - pct(p.top5_passed, p.top5_total);
-                                format!(" ({d:+.1}%)")
-                            })
-                            .unwrap_or_default();
-                        let t5 = if run.top5_total > 0 {
-                            format!("{t5_val:.1}%{t5_delta}")
-                        } else {
-                            "-".to_string()
-                        };
-                        let mrr_delta = prev
-                            .map(|p| format!(" ({:+.3})", run.mrr - p.mrr))
-                            .unwrap_or_default();
-                        let noise = pct(run.noise_hits, run.total_returned_hits);
-                        let cp = if run.cross_project_total > 0 {
-                            format!("{:.1}%", pct(run.cross_project_matched, run.cross_project_total))
-                        } else {
-                            "-".to_string()
-                        };
-                        println!(
-                            "#{} {} | {} ({} q) | T1: {} | T3: {} | T5: {} | MRR: {:.3}{} | Noise: {:.1}% | Cross: {}",
-                            run.id,
-                            format_ts(run.created_at),
-                            run.suite_name,
-                            run.total_cases,
-                            t1,
-                            t3,
-                            t5,
-                            run.mrr,
-                            mrr_delta,
-                            noise,
-                            cp
-                        );
-                    }
-                }
-            }
-        },
+        Commands::Benchmark { action } => handle_benchmark(&store, action, json)?,
     }
 
+    Ok(())
+}
+
+#[inline(never)]
+fn handle_drift(store: &Store, project: Option<String>, all: bool, json: bool) -> Result<()> {
+        if all && project.is_some() {
+            anyhow::bail!("pass either a project name or --all, not both");
+        }
+        if all {
+            let reports = store.all_project_drifts()?;
+            if json {
+                return print_json(&reports);
+            }
+            if reports.is_empty() {
+                println!("No projects registered yet.");
+            } else {
+                let mut total_findings = 0_usize;
+                for drift in &reports {
+                    let count = drift.findings.len();
+                    total_findings += count;
+                    println!("{:<14} | {} finding(s)", drift.project.name, count);
+                    for finding in &drift.findings {
+                        println!("  - [{}] {}", finding.kind, finding.summary);
+                    }
+                }
+                println!(
+                    "\nChecked {} project(s): {} total drift finding(s).",
+                    reports.len(),
+                    total_findings
+                );
+            }
+            return Ok(());
+        }
+        let project =
+            project.ok_or_else(|| anyhow::anyhow!("provide a project name or pass --all"))?;
+        let drift = store.project_drift(&project)?;
+        if json {
+            return print_json(&drift);
+        }
+        println!("Drift report: {}", drift.project.name);
+        if drift.findings.is_empty() {
+            println!("  No documentation or roadmap drift detected.");
+        } else {
+            for finding in &drift.findings {
+                println!("\n[{}] {}", finding.kind, finding.summary);
+                for ev in &finding.evidence {
+                    println!("  - {ev}");
+                }
+            }
+        }
+    Ok(())
+}
+
+#[inline(never)]
+fn handle_snapshot(store: &Store, project: Option<String>, all: bool, label: Option<String>, json: bool) -> Result<()> {
+        if all && project.is_some() {
+            anyhow::bail!("pass either a project name or --all, not both");
+        }
+        if all {
+            let snaps = store.save_all_snapshots(label.as_deref())?;
+            if json {
+                return print_json(&snaps);
+            }
+            if snaps.is_empty() {
+                println!("No projects registered.");
+            } else {
+                for s in &snaps {
+                    let lbl = s
+                        .label
+                        .as_deref()
+                        .map(|l| format!(" [{l}]"))
+                        .unwrap_or_default();
+                    println!(
+                        "#{:<3} | {:<12} | {} | files: {} | rels: {} | cov: {:.1}% | crit: {} high: {}{}",
+                        s.id,
+                        s.project_name,
+                        s.health,
+                        s.active_objects,
+                        s.relations_count,
+                        s.coverage_ratio,
+                        s.critical_risks,
+                        s.high_risks,
+                        lbl
+                    );
+                }
+                println!("Saved {} snapshot(s).", snaps.len());
+            }
+            return Ok(());
+        }
+        let project = project
+            .ok_or_else(|| anyhow::anyhow!("provide a project name or pass --all"))?;
+        let snap = store.save_snapshot(&project, label.as_deref())?;
+        if json {
+            return print_json(&snap);
+        }
+        let lbl = snap
+            .label
+            .as_deref()
+            .map(|l| format!(" [{l}]"))
+            .unwrap_or_default();
+        println!(
+            "Saved snapshot #{}{} for '{}' at {}",
+            snap.id,
+            lbl,
+            snap.project_name,
+            format_ts(snap.created_at)
+        );
+        println!(
+            "  Health: {} | Files: {} | Relations: {} | Coverage: {:.1}% ({}) | Crit: {} | High: {}",
+            snap.health,
+            snap.active_objects,
+            snap.relations_count,
+            snap.coverage_ratio,
+            snap.documentation_health,
+            snap.critical_risks,
+            snap.high_risks
+        );
+    Ok(())
+}
+
+#[inline(never)]
+fn handle_session(store: &mut Store, action: SessionCommands, json: bool) -> Result<()> {
+    match action {
+        SessionCommands::Start {
+            project,
+            note,
+            no_index,
+        } => {
+            if !no_index {
+                refresh_project_index_if_present(store, &project)?;
+            }
+            let s = store.start_session(&project, note.as_deref())?;
+            if json {
+                return print_json(&s);
+            }
+            println!(
+                "Started session {} for '{}' at {}",
+                s.id,
+                s.project_name,
+                format_ts(s.started_at)
+            );
+            println!(
+                "  Predicted Difficulty: {} (score: {})",
+                s.predicted_difficulty, s.predicted_score
+            );
+            if let Some(ref rp) = s.return_point {
+                println!("  Suggested return point: {rp}");
+            }
+        }
+        SessionCommands::Stop {
+            project,
+            quality,
+            note,
+            no_index,
+        } => {
+            if !no_index {
+                let target_project = match project.as_deref() {
+                    Some(name) => Some(name.to_string()),
+                    None => store
+                        .list_sessions(None, 20)?
+                        .into_iter()
+                        .find(|s| s.ended_at.is_none())
+                        .map(|s| s.project_name),
+                };
+                if let Some(proj_name) = target_project {
+                    refresh_project_index_if_present(store, &proj_name)?;
+                }
+            }
+            let s = store.stop_session(project.as_deref(), quality, note.as_deref())?;
+            if json {
+                return print_json(&s);
+            }
+            let dur = s.duration_secs.unwrap_or(0);
+            println!(
+                "Stopped session {} for '{}' (duration: {}s)",
+                s.id, s.project_name, dur
+            );
+            println!(
+                "  Predicted: {} (score: {}) | Actual Quality: {}",
+                s.predicted_difficulty,
+                s.predicted_score,
+                s.recovery_quality
+                    .map(|q| format!("{q}/5"))
+                    .unwrap_or_else(|| "-".to_string())
+            );
+            println!("  Files touched: {}", s.files_changed_count);
+            if !s.productive_areas.is_empty() {
+                println!("  Productive areas: {}", s.productive_areas.join(", "));
+            }
+        }
+        SessionCommands::List { project, limit } => {
+            let sessions = store.list_sessions(project.as_deref(), limit)?;
+            if json {
+                return print_json(&sessions);
+            }
+            if sessions.is_empty() {
+                println!("No work sessions recorded.");
+            } else {
+                for s in sessions {
+                    let status = match s.duration_secs {
+                        Some(d) => format!("{d}s"),
+                        None => "active".to_string(),
+                    };
+                    let qual = s
+                        .recovery_quality
+                        .map(|q| format!("{q}/5"))
+                        .unwrap_or_else(|| "-".to_string());
+                    println!(
+                        "{} | {:<12} | {} | {:<8} | pred: {:<6} | qual: {} | files: {} | return: {}",
+                        s.id,
+                        s.project_name,
+                        format_ts(s.started_at),
+                        status,
+                        s.predicted_difficulty,
+                        qual,
+                        s.files_changed_count,
+                        s.return_point.as_deref().unwrap_or("-")
+                    );
+                }
+            }
+        }
+        SessionCommands::Stats { project } => {
+            let stats = store.session_stats(project.as_deref())?;
+            if json {
+                return print_json(&stats);
+            }
+            let scope = stats.project_name.as_deref().unwrap_or("all projects");
+            println!(
+                "Session Stats ({}): total={} completed={} active={}",
+                scope, stats.total_sessions, stats.completed_sessions, stats.active_sessions
+            );
+            if let Some(med) = stats.median_duration_secs {
+                println!(
+                    "  Duration: median {}s | mean {}s",
+                    med,
+                    stats.avg_duration_secs.unwrap_or(med)
+                );
+            }
+            if let Some(avg_q) = stats.avg_quality {
+                println!("  Mean Recovery Quality: {:.2} / 5.0", avg_q);
+            }
+            if !stats.frequent_return_points.is_empty() {
+                println!("\nMost frequent return points:");
+                for (rp, cnt) in &stats.frequent_return_points {
+                    println!("  - {rp} ({cnt}x)");
+                }
+            }
+            if !stats.most_productive_areas.is_empty() {
+                println!("\nMost productive areas:");
+                for (area, cnt) in &stats.most_productive_areas {
+                    println!("  - {area} ({cnt} sessions)");
+                }
+            }
+            if !stats.by_predicted_difficulty.is_empty() {
+                println!("\nPredicted vs Actual:");
+                for row in &stats.by_predicted_difficulty {
+                    let avg_d = row
+                        .avg_duration_secs
+                        .map(|d| format!("{d}s"))
+                        .unwrap_or_else(|| "-".to_string());
+                    let avg_q = row
+                        .avg_quality
+                        .map(|q| format!("{q:.1}/5"))
+                        .unwrap_or_else(|| "-".to_string());
+                    println!(
+                        "  - {:<6} | sessions: {} | avg duration: {} | avg quality: {}",
+                        row.difficulty, row.sessions, avg_d, avg_q
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn handle_benchmark(store: &Store, action: BenchmarkCommands, json: bool) -> Result<()> {
+    match action {
+        BenchmarkCommands::Search { config, save } => {
+            let cases = load_benchmark_cases(&config)?;
+            let report = store.run_search_benchmark(&cases)?;
+            let saved_run_id = if save {
+                let suite_name = config
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| config.display().to_string());
+                Some((
+                    store.save_benchmark_run(&suite_name, &report)?,
+                    suite_name,
+                ))
+            } else {
+                None
+            };
+            if json {
+                return print_json(&JsonBenchmarkSaveResult {
+                    report: &report,
+                    saved_run_id: saved_run_id.as_ref().map(|(id, _)| *id),
+                });
+            }
+
+            for case in &report.cases {
+                let t1 = case.top1_hit.map(fmt_hit).unwrap_or("-");
+                let t3 = case.top3_hit.map(fmt_hit).unwrap_or("-");
+                let t5 = case.top5_hit.map(fmt_hit).unwrap_or("-");
+                let cp = if case.cross_project_total > 0 {
+                    format!(" | proj: {}/{}", case.cross_project_matched, case.cross_project_total)
+                } else {
+                    String::new()
+                };
+                println!(
+                    "[{:15}] {:24} | T1:{:4} T3:{:4} T5:{:4}{}",
+                    case.category, case.query, t1, t3, t5, cp
+                );
+                let failed_file = case.top1_hit == Some(false)
+                    || case.top3_hit == Some(false)
+                    || case.top5_hit == Some(false);
+                let failed_proj = case.cross_project_matched < case.cross_project_total;
+                if failed_file || failed_proj {
+                    println!("  actual: {}", case.actual_top5.join(", "));
+                }
+            }
+
+            println!("\nBenchmark Results (Queries: {}):", report.total_cases);
+            if report.top1_total > 0 {
+                println!(
+                    "  Top-1: {}/{} ({:.1}%)",
+                    report.top1_passed,
+                    report.top1_total,
+                    pct(report.top1_passed, report.top1_total)
+                );
+            }
+            if report.top3_total > 0 {
+                println!(
+                    "  Top-3: {}/{} ({:.1}%)",
+                    report.top3_passed,
+                    report.top3_total,
+                    pct(report.top3_passed, report.top3_total)
+                );
+            }
+            if report.top5_total > 0 {
+                println!(
+                    "  Top-5: {}/{} ({:.1}%)",
+                    report.top5_passed,
+                    report.top5_total,
+                    pct(report.top5_passed, report.top5_total)
+                );
+            }
+            println!("  MRR:   {:.3}", report.mrr);
+            println!(
+                "  Noise Hits: {} / {} ({:.1}%)",
+                report.noise_hits,
+                report.total_returned_hits,
+                pct(report.noise_hits, report.total_returned_hits)
+            );
+            if report.cross_project_total > 0 {
+                println!(
+                    "  Cross-Project Recall: {}/{} ({:.1}%)",
+                    report.cross_project_matched,
+                    report.cross_project_total,
+                    pct(report.cross_project_matched, report.cross_project_total)
+                );
+            }
+
+            if report.categories.len() > 1 {
+                println!("\nBy Category:");
+                for cat in &report.categories {
+                    let t3_str = if cat.top3_total > 0 {
+                        format!("{}/{}", cat.top3_passed, cat.top3_total)
+                    } else {
+                        "-".to_string()
+                    };
+                    let t5_str = if cat.top5_total > 0 {
+                        format!("{}/{}", cat.top5_passed, cat.top5_total)
+                    } else {
+                        "-".to_string()
+                    };
+                    println!(
+                        "  {:18} | cases: {:2} | Top-3: {:5} | Top-5: {:5}",
+                        cat.category, cat.cases, t3_str, t5_str
+                    );
+                }
+            }
+
+            if let Some((run_id, suite_name)) = saved_run_id {
+                println!("\nSaved benchmark run #{run_id} ({suite_name}).");
+            }
+        }
+        BenchmarkCommands::History { limit } => {
+            let runs = store.list_benchmark_runs(limit)?;
+            if json {
+                return print_json(&runs);
+            }
+            if runs.is_empty() {
+                println!("No benchmark runs saved yet. Run `vos benchmark search --save`.");
+            } else {
+                for (idx, run) in runs.iter().enumerate() {
+                    let prev = runs[idx + 1..]
+                        .iter()
+                        .find(|r| r.suite_name == run.suite_name);
+
+                    let t1 = if run.top1_total > 0 {
+                        format!("{:.1}%", pct(run.top1_passed, run.top1_total))
+                    } else {
+                        "-".to_string()
+                    };
+                    let t3 = if run.top3_total > 0 {
+                        format!("{:.1}%", pct(run.top3_passed, run.top3_total))
+                    } else {
+                        "-".to_string()
+                    };
+                    let t5_val = pct(run.top5_passed, run.top5_total);
+                    let t5_delta = prev
+                        .filter(|p| p.top5_total > 0 && run.top5_total > 0)
+                        .map(|p| {
+                            let d = t5_val - pct(p.top5_passed, p.top5_total);
+                            format!(" ({d:+.1}%)")
+                        })
+                        .unwrap_or_default();
+                    let t5 = if run.top5_total > 0 {
+                        format!("{t5_val:.1}%{t5_delta}")
+                    } else {
+                        "-".to_string()
+                    };
+                    let mrr_delta = prev
+                        .map(|p| format!(" ({:+.3})", run.mrr - p.mrr))
+                        .unwrap_or_default();
+                    let noise = pct(run.noise_hits, run.total_returned_hits);
+                    let cp = if run.cross_project_total > 0 {
+                        format!("{:.1}%", pct(run.cross_project_matched, run.cross_project_total))
+                    } else {
+                        "-".to_string()
+                    };
+                    println!(
+                        "#{} {} | {} ({} q) | T1: {} | T3: {} | T5: {} | MRR: {:.3}{} | Noise: {:.1}% | Cross: {}",
+                        run.id,
+                        format_ts(run.created_at),
+                        run.suite_name,
+                        run.total_cases,
+                        t1,
+                        t3,
+                        t5,
+                        run.mrr,
+                        mrr_delta,
+                        noise,
+                        cp
+                    );
+                }
+            }
+        }
+    }
     Ok(())
 }
 

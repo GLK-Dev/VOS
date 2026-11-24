@@ -146,6 +146,22 @@ impl Store {
         })
     }
 
+    /// Detects documentation and roadmap drift across all registered projects, ordered by severity.
+    pub fn all_project_drifts(&self) -> Result<Vec<ProjectDrift>, StoreError> {
+        let projects = self.list_projects()?;
+        let mut reports = Vec::with_capacity(projects.len());
+        for summary in projects {
+            reports.push(self.project_drift(&summary.project.name)?);
+        }
+        reports.sort_by(|a, b| {
+            b.findings
+                .len()
+                .cmp(&a.findings.len())
+                .then_with(|| a.project.name.cmp(&b.project.name))
+        });
+        Ok(reports)
+    }
+
     /// Detects deterministic documentation drift and roadmap-vs-implementation drift in a project.
     pub fn project_drift(&self, project_name: &str) -> Result<ProjectDrift, StoreError> {
         let project = self
@@ -606,6 +622,69 @@ mod tests {
 
         let drift = store.project_drift("cfg").unwrap();
         assert!(!drift.findings.iter().any(|f| f.kind == "documentation drift"));
+    }
+
+    #[test]
+    fn all_project_drifts_orders_projects_by_findings_count_then_name() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(store.all_project_drifts().unwrap().is_empty());
+
+        let mut store = store;
+        let clean = store.create_project("cleanproj", None, None).unwrap();
+        let lag = store.create_project("lagproj", None, None).unwrap();
+        let now = now_unix();
+
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(clean.id),
+                path: "/clean/README.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "README.md".to_string(),
+                summary: None,
+                content_hash: "hc1".to_string(),
+                size_bytes: 50,
+                modified_at: now - 60,
+                is_noise: false,
+                chunks: vec!["# Clean".to_string()],
+            })
+            .unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(lag.id.clone()),
+                path: "/lag/README.md".to_string(),
+                kind: ObjectKind::Note,
+                title: "README.md".to_string(),
+                summary: None,
+                content_hash: "hl1".to_string(),
+                size_bytes: 50,
+                modified_at: now - 30 * 86_400,
+                is_noise: false,
+                chunks: vec!["# Old Docs".to_string()],
+            })
+            .unwrap();
+        batch
+            .upsert_object(UpsertObjectInput {
+                project_id: Some(lag.id),
+                path: "/lag/src/lib.rs".to_string(),
+                kind: ObjectKind::Code,
+                title: "lib.rs".to_string(),
+                summary: None,
+                content_hash: "hl2".to_string(),
+                size_bytes: 50,
+                modified_at: now - 60,
+                is_noise: false,
+                chunks: vec!["pub fn work() {}".to_string()],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        let reports = store.all_project_drifts().unwrap();
+        assert_eq!(reports.len(), 2);
+        assert_eq!(reports[0].project.name, "lagproj");
+        assert!(!reports[0].findings.is_empty());
+        assert_eq!(reports[1].project.name, "cleanproj");
+        assert!(reports[1].findings.is_empty());
     }
 }
 

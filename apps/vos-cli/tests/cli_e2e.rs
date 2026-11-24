@@ -768,3 +768,31 @@ fn cli_snapshot_all_captures_all_projects_and_rejects_conflicting_args() {
     assert!(!run_vos(&db, &["snapshot"]).0);
     assert!(!run_vos(&db, &["snapshot", "--all", "alpha"]).0);
 }
+
+#[test]
+fn cli_drift_all_audits_portfolio_and_rejects_conflicting_args() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+
+    let empty_out = assert_vos_ok(&db, &["drift", "--all"]);
+    assert!(empty_out.contains("No projects registered yet."));
+
+    let clean = tmp.path().join("clean");
+    fs::create_dir_all(&clean).unwrap();
+    fs::write(clean.join("README.md"), "# Clean\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "clean", clean.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", "--all"]);
+
+    let all_out = assert_vos_ok(&db, &["drift", "--all"]);
+    assert!(all_out.contains("clean"));
+    assert!(all_out.contains("Checked 1 project(s):"));
+
+    let json_out = assert_vos_ok(&db, &["drift", "--all", "--json"]);
+    let reports: Vec<serde_json::Value> = serde_json::from_str(&json_out).expect("drift all json");
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0]["project"]["name"], "clean");
+
+    assert!(!run_vos(&db, &["drift"]).0);
+    assert!(!run_vos(&db, &["drift", "--all", "clean"]).0);
+}
