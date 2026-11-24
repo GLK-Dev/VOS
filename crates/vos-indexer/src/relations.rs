@@ -59,7 +59,10 @@ impl ProjectLookup {
             let clean = raw_path.replace('\\', "/");
             let p = Path::new(&clean);
             if let Some(src_dir) = p.parent()
-                && src_dir.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.eq_ignore_ascii_case("src"))
+                && src_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.eq_ignore_ascii_case("src"))
                 && let Some(crate_dir) = src_dir.parent()
                 && let Some(dir_name) = crate_dir.file_name().and_then(|n| n.to_str())
             {
@@ -138,9 +141,10 @@ pub(crate) fn extract_refs(path: &Path, kind: ObjectKind, text: &str) -> Vec<Raw
     }
 
     let allow_backslash = matches!(kind, ObjectKind::Note | ObjectKind::Config)
-        || path.extension().and_then(|e| e.to_str()).is_some_and(|ext| {
-            matches!(ext.to_ascii_lowercase().as_str(), "ps1" | "bat" | "cmd")
-        });
+        || path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| matches!(ext.to_ascii_lowercase().as_str(), "ps1" | "bat" | "cmd"));
     extract_path_mentions(text, kind, allow_backslash, &mut refs);
     refs
 }
@@ -154,10 +158,11 @@ pub(crate) fn resolve_relations(
     let mut lookups: HashMap<Option<String>, ProjectLookup> = HashMap::new();
 
     for obj in active_objects {
-        lookups
-            .entry(obj.project_id.clone())
-            .or_default()
-            .insert(obj.id.clone(), &obj.path, &obj.title);
+        lookups.entry(obj.project_id.clone()).or_default().insert(
+            obj.id.clone(),
+            &obj.path,
+            &obj.title,
+        );
     }
 
     // Register explicit crate identifiers declared in `[package]` / `[lib]` of scanned `Cargo.toml`.
@@ -212,9 +217,8 @@ pub(crate) fn resolve_relations(
                     })
                 }
                 RawRef::MdLink { target } => {
-                    resolve_relative_path(src_dir, proj_root.as_deref(), target, lookup).map(
-                        |to_id| (to_id, RelationType::MdLink, Some(format!("link: {target}"))),
-                    )
+                    resolve_relative_path(src_dir, proj_root.as_deref(), target, lookup)
+                        .map(|to_id| (to_id, RelationType::MdLink, Some(format!("link: {target}"))))
                 }
                 RawRef::PathRef { raw: rel } => {
                     resolve_relative_path(src_dir, proj_root.as_deref(), rel, lookup).map(|to_id| {
@@ -394,7 +398,8 @@ fn parse_use_statement(stmt: &str, out: &mut Vec<RawRef>) {
         let Some(first) = segments.first() else {
             continue;
         };
-        let is_relative = matches!(first.as_str(), "crate" | "super" | "self") && segments.len() >= 2;
+        let is_relative =
+            matches!(first.as_str(), "crate" | "super" | "self") && segments.len() >= 2;
         let is_crate_ident = !matches!(
             first.as_str(),
             "crate" | "super" | "self" | "std" | "core" | "alloc"
@@ -499,7 +504,10 @@ fn extract_markdown_links(text: &str, out: &mut Vec<RawRef>) {
 }
 
 fn clean_md_target(raw: &str) -> Option<String> {
-    let unquoted = raw.strip_prefix('<').and_then(|s| s.strip_suffix('>')).unwrap_or(raw);
+    let unquoted = raw
+        .strip_prefix('<')
+        .and_then(|s| s.strip_suffix('>'))
+        .unwrap_or(raw);
     let target = unquoted
         .split_whitespace()
         .next()
@@ -665,11 +673,7 @@ fn resolve_rust_use(
     }
 }
 
-fn resolve_module_path(
-    base_dir: &Path,
-    tail: &[String],
-    lookup: &ProjectLookup,
-) -> Option<String> {
+fn resolve_module_path(base_dir: &Path, tail: &[String], lookup: &ProjectLookup) -> Option<String> {
     if tail.is_empty() {
         return None;
     }
@@ -867,7 +871,11 @@ use super::util;
             explicit_path: None,
         }));
         assert!(refs.contains(&RawRef::RustUse {
-            segments: vec!["crate".to_string(), "models".to_string(), "GraphEdge".to_string()],
+            segments: vec![
+                "crate".to_string(),
+                "models".to_string(),
+                "GraphEdge".to_string()
+            ],
         }));
         assert!(refs.contains(&RawRef::RustUse {
             segments: vec!["super".to_string(), "util".to_string()],
@@ -878,7 +886,11 @@ use super::util;
         assert!(md_refs.contains(&RawRef::MdLink {
             target: "docs/SPEC.md".to_string(),
         }));
-        assert!(!md_refs.iter().any(|r| matches!(r, RawRef::MdLink { target } if target.contains("example.com"))));
+        assert!(
+            !md_refs
+                .iter()
+                .any(|r| matches!(r, RawRef::MdLink { target } if target.contains("example.com")))
+        );
     }
 
     #[test]
@@ -925,8 +937,18 @@ use super::util;
         ];
 
         let edges = resolve_relations(&scanned, &active, &HashMap::new());
-        assert!(edges.iter().any(|e| e.to_object_id == "obj_core_util" && e.relation_type == RelationType::RustUse));
-        assert!(edges.iter().any(|e| e.to_object_id == "obj_store_lib" && e.relation_type == RelationType::RustUse));
+        assert!(
+            edges
+                .iter()
+                .any(|e| e.to_object_id == "obj_core_util"
+                    && e.relation_type == RelationType::RustUse)
+        );
+        assert!(
+            edges
+                .iter()
+                .any(|e| e.to_object_id == "obj_store_lib"
+                    && e.relation_type == RelationType::RustUse)
+        );
         assert_eq!(edges.len(), 2);
     }
 
@@ -981,19 +1003,31 @@ use super::util;
                 object_id: "obj_toml".to_string(),
                 project_id: Some("p1".to_string()),
                 path: "/ws/apps/forge/Cargo.toml".to_string(),
-                raw_refs: extract_refs(Path::new("/ws/apps/forge/Cargo.toml"), ObjectKind::Config, manifest),
+                raw_refs: extract_refs(
+                    Path::new("/ws/apps/forge/Cargo.toml"),
+                    ObjectKind::Config,
+                    manifest,
+                ),
             },
             ScannedObjectRefs {
                 object_id: "obj_main".to_string(),
                 project_id: Some("p1".to_string()),
                 path: "/ws/apps/forge/src/main.rs".to_string(),
-                raw_refs: extract_refs(Path::new("/ws/apps/forge/src/main.rs"), ObjectKind::Code, main_src),
+                raw_refs: extract_refs(
+                    Path::new("/ws/apps/forge/src/main.rs"),
+                    ObjectKind::Code,
+                    main_src,
+                ),
             },
             ScannedObjectRefs {
                 object_id: "obj_lib".to_string(),
                 project_id: Some("p1".to_string()),
                 path: "/ws/apps/forge/src/lib.rs".to_string(),
-                raw_refs: extract_refs(Path::new("/ws/apps/forge/src/lib.rs"), ObjectKind::Code, lib_src),
+                raw_refs: extract_refs(
+                    Path::new("/ws/apps/forge/src/lib.rs"),
+                    ObjectKind::Code,
+                    lib_src,
+                ),
             },
         ];
         let active = vec![

@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use rusqlite::params;
 use vos_core::util::now_unix;
 use vos_core::{
-    AreaCoverage, AreaOwnership, AreaRisk, CoverageTier, GraphDirection, ObjectKind, ObjectRecord, ProjectCoverage, ProjectGraph,
-    ProjectOwnership, RelationType, RiskLevel,
+    AreaCoverage, AreaOwnership, AreaRisk, CoverageTier, GraphDirection, ObjectKind, ObjectRecord,
+    ProjectCoverage, ProjectGraph, ProjectOwnership, RelationType, RiskLevel,
 };
 
 use crate::queries::map_object_row;
@@ -291,7 +291,7 @@ impl Store {
         })
     }
 
-/// Computes combined Graph + Ownership + Coverage + TODO structural risks across project areas.
+    /// Computes combined Graph + Ownership + Coverage + TODO structural risks across project areas.
     pub fn analyze_area_risks(&self, project_name: &str) -> Result<Vec<AreaRisk>, StoreError> {
         let (_, _, _, risks) = self.compute_insight_bundle(project_name)?;
         Ok(risks)
@@ -300,7 +300,15 @@ impl Store {
     pub(crate) fn compute_insight_bundle(
         &self,
         project_name: &str,
-    ) -> Result<(ProjectOwnership, ProjectCoverage, ProjectGraph, Vec<AreaRisk>), StoreError> {
+    ) -> Result<
+        (
+            ProjectOwnership,
+            ProjectCoverage,
+            ProjectGraph,
+            Vec<AreaRisk>,
+        ),
+        StoreError,
+    > {
         let ownership = self.project_ownership(project_name, 14, 200)?;
         let coverage = self.project_coverage(project_name)?;
         let graph = self.project_graph(project_name, None, GraphDirection::Both, 1, 500)?;
@@ -308,7 +316,8 @@ impl Store {
         let root_prefix = ownership.project.root_path.as_deref().unwrap_or("");
         let trimmed_root = root_prefix.trim_end_matches(['/', '\\']);
         let objects = self.load_active_non_noise_objects(&ownership.project.id)?;
-        let todos_by_area = self.count_open_todos_by_area(&ownership.project.id, root_prefix, &objects)?;
+        let todos_by_area =
+            self.count_open_todos_by_area(&ownership.project.id, root_prefix, &objects)?;
 
         let mut rel_count_by_area: HashMap<String, usize> = HashMap::new();
         let mut top_hub_by_area: HashMap<String, String> = HashMap::new();
@@ -353,9 +362,8 @@ impl Store {
                 continue;
             }
 
-            let risk_score = (relation_count as f64) * 2.0
-                + (recent_activity as f64)
-                - cov.weighted_score;
+            let risk_score =
+                (relation_count as f64) * 2.0 + (recent_activity as f64) - cov.weighted_score;
             let is_high_base = risk_score >= 15.0;
             let is_low_cov = cov.tier == CoverageTier::Underdocumented;
 
@@ -376,9 +384,7 @@ impl Store {
                 RiskLevel::High => {
                     "High dependency hub with insufficient documentation".to_string()
                 }
-                RiskLevel::Medium => {
-                    "Moderate dependency hub needing documentation".to_string()
-                }
+                RiskLevel::Medium => "Moderate dependency hub needing documentation".to_string(),
                 RiskLevel::Low => "Low structural risk".to_string(),
             };
 
@@ -484,7 +490,16 @@ impl Store {
                     if stem_lower.len() >= 4
                         && !matches!(
                             stem_lower.as_str(),
-                            "mod" | "lib" | "main" | "index" | "test" | "tests" | "util" | "utils" | "error" | "models"
+                            "mod"
+                                | "lib"
+                                | "main"
+                                | "index"
+                                | "test"
+                                | "tests"
+                                | "util"
+                                | "utils"
+                                | "error"
+                                | "models"
                         )
                         && !entry.contains(&stem_lower)
                     {
@@ -505,7 +520,10 @@ impl Store {
 
         Ok(counts)
     }
-    fn load_active_non_noise_objects(&self, project_id: &str) -> Result<Vec<ObjectRecord>, StoreError> {
+    fn load_active_non_noise_objects(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ObjectRecord>, StoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, project_id, path, kind, title, summary, content_hash,
                     size_bytes, modified_at, indexed_at, is_deleted, deleted_at, is_noise
@@ -515,7 +533,8 @@ impl Store {
                AND is_noise = 0",
         )?;
         let rows = stmt.query_map(params![project_id], map_object_row)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 }
 
@@ -618,7 +637,12 @@ mod tests {
     use super::*;
     use crate::{RelationInput, UpsertObjectInput};
 
-    fn obj_input(project_id: &str, path: &str, kind: ObjectKind, modified_at: i64) -> UpsertObjectInput {
+    fn obj_input(
+        project_id: &str,
+        path: &str,
+        kind: ObjectKind,
+        modified_at: i64,
+    ) -> UpsertObjectInput {
         let title = path.rsplit('/').next().unwrap_or(path).to_string();
         UpsertObjectInput {
             project_id: Some(project_id.to_string()),
@@ -648,18 +672,38 @@ mod tests {
             .object_id()
             .to_string();
         let id_tr1 = batch
-            .upsert_object(obj_input(&proj.id, "src/transformer/mod.rs", ObjectKind::Code, now - 60))
+            .upsert_object(obj_input(
+                &proj.id,
+                "src/transformer/mod.rs",
+                ObjectKind::Code,
+                now - 60,
+            ))
             .unwrap()
             .object_id()
             .to_string();
         let _id_tr2 = batch
-            .upsert_object(obj_input(&proj.id, "src/transformer/layer.rs", ObjectKind::Code, now - 120))
+            .upsert_object(obj_input(
+                &proj.id,
+                "src/transformer/layer.rs",
+                ObjectKind::Code,
+                now - 120,
+            ))
             .unwrap();
         let _id_net1 = batch
-            .upsert_object(obj_input(&proj.id, "src/net/client.rs", ObjectKind::Code, old))
+            .upsert_object(obj_input(
+                &proj.id,
+                "src/net/client.rs",
+                ObjectKind::Code,
+                old,
+            ))
             .unwrap();
         let _id_net2 = batch
-            .upsert_object(obj_input(&proj.id, "src/net/server.rs", ObjectKind::Code, old))
+            .upsert_object(obj_input(
+                &proj.id,
+                "src/net/server.rs",
+                ObjectKind::Code,
+                old,
+            ))
             .unwrap();
 
         // DOC links directly to src/transformer via md_link -> weighted_score = 3.0 >= 2 * 0.5
@@ -687,12 +731,14 @@ mod tests {
         assert_eq!(cov.code_files, 4);
         assert_eq!(cov.doc_files, 1);
         assert!(cov.well_covered.iter().any(|a| a.area == "docs"));
+        assert!(cov.well_covered.iter().any(|a| a.area == "src/transformer"
+            && a.md_link_refs == 1
+            && (a.weighted_score - 3.0).abs() < 1e-6));
         assert!(
-            cov.well_covered
+            cov.underdocumented
                 .iter()
-                .any(|a| a.area == "src/transformer" && a.md_link_refs == 1 && (a.weighted_score - 3.0).abs() < 1e-6)
+                .any(|a| a.area == "src/net" && a.code_files == 2)
         );
-        assert!(cov.underdocumented.iter().any(|a| a.area == "src/net" && a.code_files == 2));
     }
 
     #[test]
@@ -703,27 +749,52 @@ mod tests {
 
         let mut batch = store.begin_index_batch().unwrap();
         let id_hub = batch
-            .upsert_object(obj_input(&proj.id, "src/core/mod.rs", ObjectKind::Code, now - 60))
+            .upsert_object(obj_input(
+                &proj.id,
+                "src/core/mod.rs",
+                ObjectKind::Code,
+                now - 60,
+            ))
             .unwrap()
             .object_id()
             .to_string();
         let id_a = batch
-            .upsert_object(obj_input(&proj.id, "src/core/a.rs", ObjectKind::Code, now - 120))
+            .upsert_object(obj_input(
+                &proj.id,
+                "src/core/a.rs",
+                ObjectKind::Code,
+                now - 120,
+            ))
             .unwrap()
             .object_id()
             .to_string();
         let id_b = batch
-            .upsert_object(obj_input(&proj.id, "src/core/b.rs", ObjectKind::Code, now - 180))
+            .upsert_object(obj_input(
+                &proj.id,
+                "src/core/b.rs",
+                ObjectKind::Code,
+                now - 180,
+            ))
             .unwrap()
             .object_id()
             .to_string();
         let id_c = batch
-            .upsert_object(obj_input(&proj.id, "src/core/c.rs", ObjectKind::Code, now - 240))
+            .upsert_object(obj_input(
+                &proj.id,
+                "src/core/c.rs",
+                ObjectKind::Code,
+                now - 240,
+            ))
             .unwrap()
             .object_id()
             .to_string();
         let _id_readme = batch
-            .upsert_object(obj_input(&proj.id, "README.md", ObjectKind::Note, now - 300))
+            .upsert_object(obj_input(
+                &proj.id,
+                "README.md",
+                ObjectKind::Note,
+                now - 300,
+            ))
             .unwrap();
 
         batch
@@ -760,15 +831,29 @@ mod tests {
         assert!(!cont.dependency_hubs.is_empty());
         assert!(!cont.coverage_warnings.is_empty());
         assert!(!cont.ownership_areas.is_empty());
-        assert!(cont.continue_from.iter().any(|s| s.reason.contains("Hub node")));
+        assert!(
+            cont.continue_from
+                .iter()
+                .any(|s| s.reason.contains("Hub node"))
+        );
 
         let status = store.project_status("fusion").unwrap();
         assert!((status.coverage_ratio - 25.0).abs() < 0.1);
         assert!(!status.dependency_hubs.is_empty());
-        assert!(status.risk_areas.iter().any(|r| r.contains("high activity + low coverage")));
+        assert!(
+            status
+                .risk_areas
+                .iter()
+                .any(|r| r.contains("high activity + low coverage"))
+        );
 
         let drift = store.project_drift("fusion").unwrap();
-        assert!(drift.findings.iter().any(|f| f.kind == "structural risk drift" && f.summary.contains("src/core")));
+        assert!(
+            drift
+                .findings
+                .iter()
+                .any(|f| f.kind == "structural risk drift" && f.summary.contains("src/core"))
+        );
     }
 
     #[test]
@@ -807,7 +892,9 @@ mod tests {
                 detail: Some(format!("mod {name}")),
             });
         }
-        batch.sync_relations(std::slice::from_ref(&id_hub), &rels).unwrap();
+        batch
+            .sync_relations(std::slice::from_ref(&id_hub), &rels)
+            .unwrap();
         batch.commit().unwrap();
 
         let status = store.project_status("crit").unwrap();
@@ -822,10 +909,16 @@ mod tests {
 
     #[test]
     fn unfinished_marker_ignores_string_literals_in_code() {
-        assert!(!line_has_unfinished_marker(r#"if lower.contains("// todo") {"#));
+        assert!(!line_has_unfinished_marker(
+            r#"if lower.contains("// todo") {"#
+        ));
         assert!(!line_has_unfinished_marker(r#"let s = "fixme: not real";"#));
-        assert!(line_has_unfinished_marker("// TODO: handle zero-length buffer"));
-        assert!(line_has_unfinished_marker("let x = foo(); // FIXME: edge case"));
+        assert!(line_has_unfinished_marker(
+            "// TODO: handle zero-length buffer"
+        ));
+        assert!(line_has_unfinished_marker(
+            "let x = foo(); // FIXME: edge case"
+        ));
         assert!(line_has_unfinished_marker("# TODO: clean temp files"));
     }
 }

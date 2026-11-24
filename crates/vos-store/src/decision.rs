@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::params;
 use vos_core::util::now_unix;
 use vos_core::{
-    ChangedSinceReport, ConceptExplanation, DocumentationHealth, ObjectKind, ObjectRecord, ProjectHealth, ProjectStatus, RiskLevel,
+    ChangedSinceReport, ConceptExplanation, DocumentationHealth, ObjectKind, ObjectRecord,
+    ProjectHealth, ProjectStatus, RiskLevel,
 };
 
 use crate::concepts::ConceptDictionary;
@@ -302,8 +303,10 @@ impl Store {
             }
 
             let obj_events = events_by_obj.get(&obj.id);
-            let has_modified_ev = obj_events
-                .is_some_and(|evs| evs.iter().any(|(et, _)| et == "modified" || et == "restored"));
+            let has_modified_ev = obj_events.is_some_and(|evs| {
+                evs.iter()
+                    .any(|(et, _)| et == "modified" || et == "restored")
+            });
             let added_near_mtime = obj_events.is_some_and(|evs| {
                 evs.iter()
                     .any(|(et, ts)| et == "added" && (ts - obj.modified_at).abs() <= 86_400)
@@ -381,9 +384,7 @@ impl Store {
                     continue;
                 }
 
-                let cleaned = trimmed
-                    .trim_start_matches(['-', '*', '>', ' '])
-                    .trim();
+                let cleaned = trimmed.trim_start_matches(['-', '*', '>', ' ']).trim();
                 let lower = cleaned.to_lowercase();
 
                 if (lower.starts_with("open question:") || lower.starts_with("fixme:"))
@@ -439,7 +440,9 @@ impl Store {
             && let Some(ts) = last_activity_at
         {
             let days = now_unix().saturating_sub(ts) / 86_400;
-            risks.push(format!("project dormant ({days} days since last modification)"));
+            risks.push(format!(
+                "project dormant ({days} days since last modification)"
+            ));
         }
 
         let has_readme: i64 = self.conn.query_row(
@@ -469,7 +472,9 @@ impl Store {
             (Some(_), None) => risks.push("no documentation or notes indexed".to_string()),
             (Some(c_ts), Some(d_ts)) if c_ts - d_ts > DOC_LAG_THRESHOLD_SECS => {
                 let lag_days = (c_ts - d_ts) / 86_400;
-                risks.push(format!("no recent updates in docs (lag code by {lag_days} days)"));
+                risks.push(format!(
+                    "no recent updates in docs (lag code by {lag_days} days)"
+                ));
             }
             _ => {}
         }
@@ -484,7 +489,11 @@ impl Store {
         Ok(risks)
     }
 
-    fn extract_definition(&self, object_id: &str, concept: &str) -> Result<Option<String>, StoreError> {
+    fn extract_definition(
+        &self,
+        object_id: &str,
+        concept: &str,
+    ) -> Result<Option<String>, StoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT text FROM chunks WHERE object_id = ?1 ORDER BY chunk_index ASC LIMIT 5",
         )?;
@@ -492,10 +501,7 @@ impl Store {
             .query_map(params![object_id], |row| row.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?;
 
-        let terms: Vec<String> = concept
-            .split_whitespace()
-            .map(str::to_lowercase)
-            .collect();
+        let terms: Vec<String> = concept.split_whitespace().map(str::to_lowercase).collect();
 
         for chunk in &chunks {
             for para in chunk.split("\n\n") {
@@ -562,8 +568,8 @@ fn update_fence_state(trimmed: &str, current: Option<char>) -> Option<Option<cha
 
 #[cfg(test)]
 mod tests {
-    use vos_core::util::now_unix;
     use vos_core::ObjectKind;
+    use vos_core::util::now_unix;
 
     use super::*;
     use crate::UpsertObjectInput;
@@ -586,7 +592,9 @@ mod tests {
                 size_bytes: 100,
                 modified_at: now - 30 * 86_400,
                 is_noise: false,
-                chunks: vec!["Project context is the active working set of files and events.".to_string()],
+                chunks: vec![
+                    "Project context is the active working set of files and events.".to_string(),
+                ],
             })
             .unwrap();
         batch
@@ -600,7 +608,10 @@ mod tests {
                 size_bytes: 120,
                 modified_at: now - 25 * 86_400,
                 is_noise: false,
-                chunks: vec!["- [ ] Add scheduler fairness verification\nOPEN QUESTION: keep WAL mode?".to_string()],
+                chunks: vec![
+                    "- [ ] Add scheduler fairness verification\nOPEN QUESTION: keep WAL mode?"
+                        .to_string(),
+                ],
             })
             .unwrap();
         batch
@@ -623,14 +634,23 @@ mod tests {
         assert_eq!(status.health, ProjectHealth::Active);
         assert_eq!(status.pending_work.len(), 1);
         assert_eq!(status.open_questions.len(), 1);
-        assert!(status.risk_areas.iter().any(|r| r.contains("no recent updates in docs")));
+        assert!(
+            status
+                .risk_areas
+                .iter()
+                .any(|r| r.contains("no recent updates in docs"))
+        );
 
-        let explained = store.explain_concept("project context", Some("demo")).unwrap();
+        let explained = store
+            .explain_concept("project context", Some("demo"))
+            .unwrap();
         assert!(!explained.files_contributing.is_empty());
         assert!(explained.definition.is_some());
         assert!(!explained.relevant_code.is_empty());
 
-        let diff = store.changed_since(now - 86_400, "yesterday", Some("demo")).unwrap();
+        let diff = store
+            .changed_since(now - 86_400, "yesterday", Some("demo"))
+            .unwrap();
         assert_eq!(diff.added.len(), 1);
         assert_eq!(diff.added[0].title, "context.rs");
     }
@@ -666,4 +686,3 @@ mod tests {
         assert_eq!(pending, vec!["guide.md: Real task after fence"]);
     }
 }
-

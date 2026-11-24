@@ -273,8 +273,14 @@ impl Store {
         let mut hits: Vec<SearchHit> = merged
             .into_values()
             .map(|mut cand| {
-                let (score, signals) =
-                    score_search_candidate(&cand, &query_terms, &phrase_lower, intent, synonyms, include_internal);
+                let (score, signals) = score_search_candidate(
+                    &cand,
+                    &query_terms,
+                    &phrase_lower,
+                    intent,
+                    synonyms,
+                    include_internal,
+                );
                 cand.hit.score = score;
                 cand.hit.signals = signals;
                 cand.hit
@@ -310,7 +316,8 @@ impl Store {
                 object_count: row.get::<_, i64>(1)?.max(0) as usize,
             })
         })?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     fn search_without_query(
@@ -377,7 +384,9 @@ impl Store {
                         delta: NOISE_PENALTY,
                     });
                 }
-                if !include_internal && search_visibility(Path::new(&path)) == SearchVisibility::Internal {
+                if !include_internal
+                    && search_visibility(Path::new(&path)) == SearchVisibility::Internal
+                {
                     score += INTERNAL_ARTIFACT_PENALTY;
                     signals.push(SearchSignal {
                         label: "internal artifact penalty".to_string(),
@@ -444,22 +453,30 @@ impl Store {
             )?;
 
             let rows = stmt.query_map(
-                params![fts_query, project_name, pool_limit, tag_filter, kind_filter, since_ts],
+                params![
+                    fts_query,
+                    project_name,
+                    pool_limit,
+                    tag_filter,
+                    kind_filter,
+                    since_ts
+                ],
                 |row| {
-                let kind_str: String = row.get(4)?;
-                let is_noise: i64 = row.get(5)?;
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    ObjectKind::from_db(&kind_str),
-                    is_noise != 0,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, f64>(7)?,
-                    row.get::<_, String>(8)?,
-                ))
-            })?;
+                    let kind_str: String = row.get(4)?;
+                    let is_noise: i64 = row.get(5)?;
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        ObjectKind::from_db(&kind_str),
+                        is_noise != 0,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, f64>(7)?,
+                        row.get::<_, String>(8)?,
+                    ))
+                },
+            )?;
 
             for row in rows {
                 let (id, pname, title, path, kind, is_noise, snippet, bm25_rank, chunk_text) = row?;
@@ -488,7 +505,9 @@ impl Store {
                 }
                 if entry.observed_text_lower.len() < 4096 {
                     entry.observed_text_lower.push('\n');
-                    entry.observed_text_lower.push_str(&chunk_text.to_lowercase());
+                    entry
+                        .observed_text_lower
+                        .push_str(&chunk_text.to_lowercase());
                 }
                 if entry.best_chunk_bm25.is_none_or(|prev| bm25_rank < prev) && !is_concept {
                     entry.best_chunk_bm25 = Some(bm25_rank);
@@ -524,22 +543,30 @@ impl Store {
             )?;
 
             let rows = stmt.query_map(
-                params![fts_query, project_name, pool_limit, tag_filter, kind_filter, since_ts],
+                params![
+                    fts_query,
+                    project_name,
+                    pool_limit,
+                    tag_filter,
+                    kind_filter,
+                    since_ts
+                ],
                 |row| {
-                let kind_str: String = row.get(4)?;
-                let is_noise: i64 = row.get(5)?;
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    ObjectKind::from_db(&kind_str),
-                    is_noise != 0,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, f64>(7)?,
-                    row.get::<_, String>(8)?,
-                ))
-            })?;
+                    let kind_str: String = row.get(4)?;
+                    let is_noise: i64 = row.get(5)?;
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        ObjectKind::from_db(&kind_str),
+                        is_noise != 0,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, f64>(7)?,
+                        row.get::<_, String>(8)?,
+                    ))
+                },
+            )?;
 
             for row in rows {
                 let (id, pname, title, path, kind, is_noise, snippet, bm25_rank, summary) = row?;
@@ -604,7 +631,10 @@ impl Store {
                 lookup_tags.push(clean);
             }
         }
-        if query_terms.len() > 1 && !phrase_lower.is_empty() && !lookup_tags.contains(&phrase_lower.to_string()) {
+        if query_terms.len() > 1
+            && !phrase_lower.is_empty()
+            && !lookup_tags.contains(&phrase_lower.to_string())
+        {
             lookup_tags.push(phrase_lower.to_string());
         }
         if lookup_tags.is_empty() {
@@ -630,7 +660,14 @@ impl Store {
 
         for tag in lookup_tags {
             let rows = stmt.query_map(
-                params![tag, project_name, tag_filter, kind_filter, pool_limit, since_ts],
+                params![
+                    tag,
+                    project_name,
+                    tag_filter,
+                    kind_filter,
+                    pool_limit,
+                    since_ts
+                ],
                 |row| {
                     let kind_str: String = row.get(4)?;
                     let is_noise: i64 = row.get(5)?;
@@ -668,8 +705,16 @@ fn score_search_candidate(
     include_internal: bool,
 ) -> (f64, Vec<SearchSignal>) {
     let mut signals = Vec::new();
-    let title_multiplier = if intent == QueryIntent::Concept { 2.0 } else { 1.0 };
-    let phrase_multiplier = if intent == QueryIntent::Concept { 2.0 } else { 1.0 };
+    let title_multiplier = if intent == QueryIntent::Concept {
+        2.0
+    } else {
+        1.0
+    };
+    let phrase_multiplier = if intent == QueryIntent::Concept {
+        2.0
+    } else {
+        1.0
+    };
 
     let chunk_bm25_mag = cand.best_chunk_bm25.map(|r| (-r).max(0.0)).unwrap_or(0.0);
     let obj_bm25_mag = cand.object_bm25.map(|r| (-r).max(0.0)).unwrap_or(0.0);
@@ -701,8 +746,8 @@ fn score_search_candidate(
     }
 
     if cand.chunk_hits > 1 {
-        let extra = ((cand.chunk_hits - 1) as f64 * MULTI_CHUNK_STEP_BOOST)
-            .min(MULTI_CHUNK_MAX_BOOST);
+        let extra =
+            ((cand.chunk_hits - 1) as f64 * MULTI_CHUNK_STEP_BOOST).min(MULTI_CHUNK_MAX_BOOST);
         signals.push(SearchSignal {
             label: format!("multiple chunk hits ({})", cand.chunk_hits),
             delta: extra,
@@ -802,7 +847,9 @@ fn score_search_candidate(
         });
     }
 
-    if !include_internal && search_visibility(Path::new(&cand.hit.path)) == SearchVisibility::Internal {
+    if !include_internal
+        && search_visibility(Path::new(&cand.hit.path)) == SearchVisibility::Internal
+    {
         signals.push(SearchSignal {
             label: "internal artifact penalty".to_string(),
             delta: INTERNAL_ARTIFACT_PENALTY,
@@ -877,7 +924,9 @@ mod tests {
                 size_bytes: 200,
                 modified_at: 1000,
                 is_noise: false,
-                chunks: vec!["Stores chronological events and project timeline entries.".to_string()],
+                chunks: vec![
+                    "Stores chronological events and project timeline entries.".to_string(),
+                ],
             })
             .unwrap();
         batch
@@ -899,14 +948,18 @@ mod tests {
         let hits = store.search("event log", Some("vos"), 5).unwrap();
         assert_eq!(hits[0].title, "SPEC.md");
         assert_eq!(hits[0].intent, QueryIntent::Concept);
-        assert!(hits[0]
-            .signals
-            .iter()
-            .any(|s| s.label == "concept document boost"));
-        assert!(hits[0]
-            .signals
-            .iter()
-            .any(|s| s.label.starts_with("concept expansion")));
+        assert!(
+            hits[0]
+                .signals
+                .iter()
+                .any(|s| s.label == "concept document boost")
+        );
+        assert!(
+            hits[0]
+                .signals
+                .iter()
+                .any(|s| s.label.starts_with("concept expansion"))
+        );
     }
 
     #[test]
@@ -951,10 +1004,11 @@ mod tests {
         let diag = store
             .search_with_options("event log", Some("vos"), 5, true)
             .unwrap();
-        assert!(!diag.iter().any(|h| h
-            .signals
-            .iter()
-            .any(|s| s.label == "internal artifact penalty")));
+        assert!(!diag.iter().any(|h| {
+            h.signals
+                .iter()
+                .any(|s| s.label == "internal artifact penalty")
+        }));
     }
 
     #[test]
@@ -993,7 +1047,11 @@ mod tests {
         batch.commit().unwrap();
 
         store
-            .add_tags_scoped("auth.rs", Some("tagrepo"), &["auth".into(), "security".into()])
+            .add_tags_scoped(
+                "auth.rs",
+                Some("tagrepo"),
+                &["auth".into(), "security".into()],
+            )
             .unwrap();
         let tags = store.list_tags(Some("tagrepo"), 10).unwrap();
         assert_eq!(tags.len(), 2);
@@ -1113,8 +1171,16 @@ mod tests {
             .add_tags_scoped("worker.rs", Some("tagboost"), &["billing".into()])
             .unwrap();
         let hits = store.search("billing", Some("tagboost"), 5).unwrap();
-        let worker_hit = hits.iter().find(|h| h.title == "worker.rs").expect("tagged object found");
-        assert!(worker_hit.signals.iter().any(|s| s.label == "tag match (billing)"));
+        let worker_hit = hits
+            .iter()
+            .find(|h| h.title == "worker.rs")
+            .expect("tagged object found");
+        assert!(
+            worker_hit
+                .signals
+                .iter()
+                .any(|s| s.label == "tag match (billing)")
+        );
     }
 
     #[test]

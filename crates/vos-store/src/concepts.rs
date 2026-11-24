@@ -134,4 +134,3 @@ fn normalize_phrase(raw: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
-

@@ -103,9 +103,10 @@ pub fn classify_path(path: &Path) -> ObjectKind {
         Some("log") => ObjectKind::Other,
         Some("pdf" | "docx" | "doc" | "odt" | "epub" | "pptx" | "xlsx" | "csv") => ObjectKind::Doc,
         Some("gguf" | "safetensors" | "onnx" | "ggml" | "pt" | "pth") => ObjectKind::Model,
-        Some("png" | "jpg" | "jpeg" | "webp" | "gif" | "svg" | "mp3" | "wav" | "flac" | "mp4" | "mkv") => {
-            ObjectKind::Media
-        }
+        Some(
+            "png" | "jpg" | "jpeg" | "webp" | "gif" | "svg" | "mp3" | "wav" | "flac" | "mp4"
+            | "mkv",
+        ) => ObjectKind::Media,
         _ => ObjectKind::Other,
     }
 }
@@ -133,7 +134,6 @@ pub fn sha256_file(path: &Path) -> Result<String, VosError> {
     }
     Ok(hex)
 }
-
 
 const FAST_FINGERPRINT_THRESHOLD: u64 = 16 * 1024 * 1024;
 const SAMPLE_WINDOW_BYTES: usize = 64 * 1024;
@@ -222,16 +222,31 @@ mod tests {
         assert_eq!(classify_path(Path::new("init.bat")), ObjectKind::Code);
         assert_eq!(classify_path(Path::new("run.cmd")), ObjectKind::Code);
         assert_eq!(classify_path(Path::new("Cargo.toml")), ObjectKind::Config);
-        assert_eq!(classify_path(Path::new("locales/en.json")), ObjectKind::Config);
-        assert_eq!(classify_path(Path::new(".github/workflows/ci.yml")), ObjectKind::Config);
+        assert_eq!(
+            classify_path(Path::new("locales/en.json")),
+            ObjectKind::Config
+        );
+        assert_eq!(
+            classify_path(Path::new(".github/workflows/ci.yml")),
+            ObjectKind::Config
+        );
         assert_eq!(classify_path(Path::new("SPEC.MD")), ObjectKind::Note);
         assert_eq!(classify_path(Path::new("paper.pdf")), ObjectKind::Doc);
         assert_eq!(classify_path(Path::new("qwen3.gguf")), ObjectKind::Model);
         assert_eq!(classify_path(Path::new("diagram.png")), ObjectKind::Media);
-        assert_eq!(classify_path(Path::new("archive.tar.gz")), ObjectKind::Other);
+        assert_eq!(
+            classify_path(Path::new("archive.tar.gz")),
+            ObjectKind::Other
+        );
         assert_eq!(classify_path(Path::new("build.log")), ObjectKind::Other);
-        assert_eq!(classify_path(Path::new("benchmark_output.txt")), ObjectKind::Other);
-        assert_eq!(classify_path(Path::new("requirements.txt")), ObjectKind::Config);
+        assert_eq!(
+            classify_path(Path::new("benchmark_output.txt")),
+            ObjectKind::Other
+        );
+        assert_eq!(
+            classify_path(Path::new("requirements.txt")),
+            ObjectKind::Config
+        );
     }
 
     #[test]
@@ -265,7 +280,3 @@ mod tests {
         );
     }
 }
-
-
-
-

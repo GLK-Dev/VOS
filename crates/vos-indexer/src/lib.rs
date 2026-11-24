@@ -237,15 +237,14 @@ pub fn index_path_with_options(
         })
         .collect();
 
-    let mut active_lookup_map: HashMap<String, ActiveObjectRef> =
-        store
-            .list_active_object_paths(explicit_project_id.as_deref())?
-            .into_iter()
-            .filter(|entry| {
-                !is_path_within(&entry.path, &canonical_root) || seen_paths.contains(&entry.path)
-            })
-            .map(|entry| (entry.path.clone(), entry))
-            .collect();
+    let mut active_lookup_map: HashMap<String, ActiveObjectRef> = store
+        .list_active_object_paths(explicit_project_id.as_deref())?
+        .into_iter()
+        .filter(|entry| {
+            !is_path_within(&entry.path, &canonical_root) || seen_paths.contains(&entry.path)
+        })
+        .map(|entry| (entry.path.clone(), entry))
+        .collect();
 
     let mut refs_lookup: HashMap<String, Vec<RawRef>> = raw_refs_by_path.into_iter().collect();
 
@@ -291,11 +290,8 @@ pub fn index_path_with_options(
         }
     }
 
-    report.deleted = batch.mark_missing_deleted(
-        &canonical_root,
-        explicit_project_id.as_deref(),
-        &seen_paths,
-    )?;
+    report.deleted =
+        batch.mark_missing_deleted(&canonical_root, explicit_project_id.as_deref(), &seen_paths)?;
 
     let active_objects: Vec<_> = active_lookup_map.into_values().collect();
     let relations = resolve_relations(&scanned_refs, &active_objects, &project_roots);
@@ -469,9 +465,17 @@ mod tests {
         assert_eq!(third.modified, 1);
         assert_eq!(third.deleted, 1);
 
-        assert!(store.search("Wait-free", Some("demo"), 10).unwrap().is_empty());
+        assert!(
+            store
+                .search("Wait-free", Some("demo"), 10)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
-            store.search("priority queue", Some("demo"), 10).unwrap().len(),
+            store
+                .search("priority queue", Some("demo"), 10)
+                .unwrap()
+                .len(),
             1
         );
 
@@ -535,11 +539,7 @@ mod relation_indexing_tests {
             "# Architecture\nCore entry: [lib.rs](../src/lib.rs).\n",
         )
         .unwrap();
-        fs::write(
-            root.join("src/lib.rs"),
-            "pub mod transformer;\n",
-        )
-        .unwrap();
+        fs::write(root.join("src/lib.rs"), "pub mod transformer;\n").unwrap();
         fs::write(
             root.join("src/transformer/mod.rs"),
             "pub mod kv_cache;\npub mod layer;\nuse crate::transformer::layer::Layer;\n",
@@ -550,11 +550,7 @@ mod relation_indexing_tests {
             "use super::layer;\npub struct KvCache;\n",
         )
         .unwrap();
-        fs::write(
-            root.join("src/transformer/layer.rs"),
-            "pub struct Layer;\n",
-        )
-        .unwrap();
+        fs::write(root.join("src/transformer/layer.rs"), "pub struct Layer;\n").unwrap();
 
         let mut store = Store::open_in_memory().unwrap();
         store
@@ -566,7 +562,13 @@ mod relation_indexing_tests {
         assert!(first.relations >= 6);
 
         let graph = store
-            .project_graph("rustapp", Some("transformer/mod.rs"), GraphDirection::Both, 2, 5)
+            .project_graph(
+                "rustapp",
+                Some("transformer/mod.rs"),
+                GraphDirection::Both,
+                2,
+                5,
+            )
             .unwrap();
         assert_eq!(graph.hubs[0].outgoing_count, 3); // mod kv_cache, mod layer, use layer
         assert_eq!(graph.hubs[0].incoming_count, 1); // src/lib.rs
@@ -584,7 +586,13 @@ mod relation_indexing_tests {
         assert_eq!(third.deleted, 1);
 
         let graph_after = store
-            .project_graph("rustapp", Some("transformer/mod.rs"), GraphDirection::Outgoing, 2, 5)
+            .project_graph(
+                "rustapp",
+                Some("transformer/mod.rs"),
+                GraphDirection::Outgoing,
+                2,
+                5,
+            )
             .unwrap();
         assert_eq!(graph_after.hubs[0].outgoing_count, 1);
     }

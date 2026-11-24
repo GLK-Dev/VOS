@@ -29,11 +29,26 @@ pub use graph::ActiveObjectRef;
 pub use search::SearchFilters;
 
 const MIGRATIONS: &[(&str, &str)] = &[
-    ("0001_init", include_str!("../../../migrations/0001_init.sql")),
-    ("0002_noise", include_str!("../../../migrations/0002_noise.sql")),
-    ("0003_benchmark_history", include_str!("../../../migrations/0003_benchmark_history.sql")),
-    ("0004_relations", include_str!("../../../migrations/0004_relations.sql")),
-    ("0005_snapshots_and_sessions", include_str!("../../../migrations/0005_snapshots_and_sessions.sql")),
+    (
+        "0001_init",
+        include_str!("../../../migrations/0001_init.sql"),
+    ),
+    (
+        "0002_noise",
+        include_str!("../../../migrations/0002_noise.sql"),
+    ),
+    (
+        "0003_benchmark_history",
+        include_str!("../../../migrations/0003_benchmark_history.sql"),
+    ),
+    (
+        "0004_relations",
+        include_str!("../../../migrations/0004_relations.sql"),
+    ),
+    (
+        "0005_snapshots_and_sessions",
+        include_str!("../../../migrations/0005_snapshots_and_sessions.sql"),
+    ),
 ];
 
 /// Errors returned by the SQLite store layer.
@@ -254,7 +269,10 @@ impl Store {
             "DELETE FROM objects WHERE project_id = ?1",
             params![project.id],
         )?;
-        tx.execute("DELETE FROM events WHERE project_id = ?1", params![project.id])?;
+        tx.execute(
+            "DELETE FROM events WHERE project_id = ?1",
+            params![project.id],
+        )?;
         tx.execute("DELETE FROM projects WHERE id = ?1", params![project.id])?;
         tx.commit()?;
 
@@ -276,7 +294,10 @@ impl Store {
     }
 
     /// Finds the most specific project whose `root_path` contains `canonical_path`.
-    pub fn find_project_for_path(&self, canonical_path: &str) -> Result<Option<Project>, StoreError> {
+    pub fn find_project_for_path(
+        &self,
+        canonical_path: &str,
+    ) -> Result<Option<Project>, StoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, root_path, description, created_at, updated_at
              FROM projects WHERE root_path IS NOT NULL",
@@ -326,7 +347,8 @@ impl Store {
             })
         })?;
 
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     /// Convenience single-object upsert in its own transaction.
@@ -351,7 +373,11 @@ impl Store {
     }
 
     /// Attaches manual tags to an object identified by ID or path and records a `tagged` event.
-    pub fn add_tags(&mut self, id_or_path: &str, tags: &[String]) -> Result<ObjectRecord, StoreError> {
+    pub fn add_tags(
+        &mut self,
+        id_or_path: &str,
+        tags: &[String],
+    ) -> Result<ObjectRecord, StoreError> {
         self.add_tags_scoped(id_or_path, None, tags)
     }
 
@@ -475,15 +501,15 @@ impl Store {
             sqlite_ok = false;
         }
 
-        let objects_count: i64 =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM objects", [], |r| r.get(0))?;
+        let objects_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM objects", [], |r| r.get(0))?;
         let objects_fts_count: i64 =
             self.conn
                 .query_row("SELECT COUNT(*) FROM objects_fts_docsize", [], |r| r.get(0))?;
-        let chunks_count: i64 =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))?;
+        let chunks_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))?;
         let chunks_fts_count: i64 =
             self.conn
                 .query_row("SELECT COUNT(*) FROM chunks_fts_docsize", [], |r| r.get(0))?;
@@ -618,7 +644,10 @@ mod doctor_tests {
         // Simulate a soft-deleted target leaving a stale relation edge behind.
         store
             .conn
-            .execute("UPDATE objects SET is_deleted = 1 WHERE id = ?1", params![b])
+            .execute(
+                "UPDATE objects SET is_deleted = 1 WHERE id = ?1",
+                params![b],
+            )
             .unwrap();
         let pre = store.doctor(false).unwrap();
         assert!(!pre.healthy);
@@ -660,12 +689,18 @@ mod doctor_tests {
             .unwrap()
             .object_id()
             .to_string();
-        store.add_tags_scoped(&obj_id, Some("orig"), &["core".into()]).unwrap();
+        store
+            .add_tags_scoped(&obj_id, Some("orig"), &["core".into()])
+            .unwrap();
         store.start_session("orig", Some("keep me")).unwrap();
         store.stop_session(Some("orig"), Some(5), None).unwrap();
 
         assert!(store.update_project("orig", None, None, None).is_err());
-        assert!(store.update_project("orig", Some("other"), None, None).is_err());
+        assert!(
+            store
+                .update_project("orig", Some("other"), None, None)
+                .is_err()
+        );
 
         let updated = store
             .update_project("orig", Some("renamed"), Some(&dir_b), Some("Moved"))

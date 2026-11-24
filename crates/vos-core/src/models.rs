@@ -401,12 +401,6 @@ pub struct BenchmarkRunRecord {
     pub created_at: i64,
 }
 
-
-
-
-
-
-
 /// Deterministic project health classification for `vos status <project>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ProjectHealth {
@@ -516,7 +510,6 @@ pub struct ProjectDrift {
     pub project: Project,
     pub findings: Vec<DriftFinding>,
 }
-
 
 /// Deterministic dependency edge type stored in `relations`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -902,6 +895,14 @@ pub struct SessionStats {
     pub frequent_return_points: Vec<(String, usize)>,
     pub most_productive_areas: Vec<(String, usize)>,
     pub by_predicted_difficulty: Vec<DifficultyStats>,
+    /// Completed `Hard`-predicted sessions that recovered quickly with high quality.
+    pub false_alarms: usize,
+    /// Completed `Hard`-predicted sessions with a recorded duration and quality.
+    pub hard_scored_sessions: usize,
+    /// Completed `Easy`-predicted sessions that were slow or low quality.
+    pub missed_difficulty: usize,
+    /// Completed `Easy`-predicted sessions with a recorded duration or quality.
+    pub easy_scored_sessions: usize,
 }
 
 /// Experimental structural centrality metrics for a node in the dependency graph.

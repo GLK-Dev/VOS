@@ -72,12 +72,18 @@ fn cli_full_v1_workflow_end_to_end() {
     );
     assert!(created.contains("Created project 'alpha'"));
 
-    let indexed = assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "alpha"]);
+    let indexed = assert_vos_ok(
+        &db,
+        &["index", proj.to_str().unwrap(), "--project", "alpha"],
+    );
     assert!(indexed.contains("Scanned:   4"));
     assert!(indexed.contains("added: 4"));
 
     // Repeat index must be 100% unchanged.
-    let reindexed = assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "alpha"]);
+    let reindexed = assert_vos_ok(
+        &db,
+        &["index", proj.to_str().unwrap(), "--project", "alpha"],
+    );
     assert!(reindexed.contains("Unchanged: 4"));
 
     let list = assert_vos_ok(&db, &["project", "list"]);
@@ -221,7 +227,11 @@ fn cli_builds_and_queries_dependency_graph() {
         "# Engine\nSee [Design](docs/DESIGN.md).\n",
     )
     .unwrap();
-    fs::write(proj.join("docs/DESIGN.md"), "# Design\nDetails for `kv_cache.rs`.\n").unwrap();
+    fs::write(
+        proj.join("docs/DESIGN.md"),
+        "# Design\nDetails for `kv_cache.rs`.\n",
+    )
+    .unwrap();
     fs::write(proj.join("src/lib.rs"), "pub mod transformer;\n").unwrap();
     fs::write(
         proj.join("src/transformer/mod.rs"),
@@ -235,8 +245,14 @@ fn cli_builds_and_queries_dependency_graph() {
     )
     .unwrap();
 
-    assert_vos_ok(&db, &["project", "create", "engine", proj.to_str().unwrap()]);
-    let idx_out = assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "engine"]);
+    assert_vos_ok(
+        &db,
+        &["project", "create", "engine", proj.to_str().unwrap()],
+    );
+    let idx_out = assert_vos_ok(
+        &db,
+        &["index", proj.to_str().unwrap(), "--project", "engine"],
+    );
     assert!(idx_out.contains("Relations:"));
 
     let graph_out = assert_vos_ok(&db, &["graph", "engine"]);
@@ -260,10 +276,7 @@ fn cli_builds_and_queries_dependency_graph() {
     assert!(focused.contains("attention.rs [rust_mod]"));
     assert!(focused.contains("lib.rs [rust_mod]"));
 
-    let why_out = assert_vos_ok(
-        &db,
-        &["why", "transformer/mod.rs", "--project", "engine"],
-    );
+    let why_out = assert_vos_ok(&db, &["why", "transformer/mod.rs", "--project", "engine"]);
     assert!(why_out.contains("Dependencies:"));
     assert!(why_out.contains("Referenced by:"));
 }
@@ -285,8 +298,14 @@ fn cli_reports_activity_ownership_and_relation_weighted_coverage() {
     fs::write(proj.join("src/core/engine.rs"), "pub fn run() {}\n").unwrap();
     fs::write(proj.join("src/net/socket.rs"), "pub fn listen() {}\n").unwrap();
 
-    assert_vos_ok(&db, &["project", "create", "insight", proj.to_str().unwrap()]);
-    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "insight"]);
+    assert_vos_ok(
+        &db,
+        &["project", "create", "insight", proj.to_str().unwrap()],
+    );
+    assert_vos_ok(
+        &db,
+        &["index", proj.to_str().unwrap(), "--project", "insight"],
+    );
 
     let own_out = assert_vos_ok(&db, &["ownership", "insight", "--days", "14"]);
     assert!(own_out.contains("Ownership: insight"));
@@ -321,8 +340,14 @@ fn cli_continue_status_and_drift_surface_insight_layer_signals() {
     fs::write(proj.join("src/engine/b.rs"), "pub fn b() {}\n").unwrap();
     fs::write(proj.join("src/engine/c.rs"), "pub fn c() {}\n").unwrap();
 
-    assert_vos_ok(&db, &["project", "create", "hubrepo", proj.to_str().unwrap()]);
-    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "hubrepo"]);
+    assert_vos_ok(
+        &db,
+        &["project", "create", "hubrepo", proj.to_str().unwrap()],
+    );
+    assert_vos_ok(
+        &db,
+        &["index", proj.to_str().unwrap(), "--project", "hubrepo"],
+    );
 
     let cont_out = assert_vos_ok(&db, &["continue", "hubrepo"]);
     assert!(cont_out.contains("Hub node (3 relations)"));
@@ -361,8 +386,14 @@ fn cli_promotes_high_risk_hub_with_open_todos_to_critical_risk() {
         .unwrap();
     }
 
-    assert_vos_ok(&db, &["project", "create", "critrepo", proj.to_str().unwrap()]);
-    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "critrepo"]);
+    assert_vos_ok(
+        &db,
+        &["project", "create", "critrepo", proj.to_str().unwrap()],
+    );
+    assert_vos_ok(
+        &db,
+        &["index", proj.to_str().unwrap(), "--project", "critrepo"],
+    );
 
     let status_out = assert_vos_ok(&db, &["status", "critrepo"]);
     assert!(status_out.contains("Critical Risks: 1"));
@@ -380,11 +411,21 @@ fn cli_status_experimental_predictor_is_opt_in_and_explainable() {
     let db = tmp.path().join("vos.db");
     let proj = tmp.path().join("expproj");
     fs::create_dir_all(proj.join("src")).unwrap();
-    fs::write(proj.join("README.md"), "# ExpProj\nOPEN QUESTION: keep cache?\n").unwrap();
+    fs::write(
+        proj.join("README.md"),
+        "# ExpProj\nOPEN QUESTION: keep cache?\n",
+    )
+    .unwrap();
     fs::write(proj.join("src/lib.rs"), "pub fn init() {}\n").unwrap();
 
-    assert_vos_ok(&db, &["project", "create", "expproj", proj.to_str().unwrap()]);
-    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "expproj"]);
+    assert_vos_ok(
+        &db,
+        &["project", "create", "expproj", proj.to_str().unwrap()],
+    );
+    assert_vos_ok(
+        &db,
+        &["index", proj.to_str().unwrap(), "--project", "expproj"],
+    );
 
     // Default `vos status` must stay untouched.
     let baseline = assert_vos_ok(&db, &["status", "expproj"]);
@@ -410,8 +451,15 @@ fn cli_status_experimental_predictor_is_opt_in_and_explainable() {
     let stdout = String::from_utf8_lossy(&env_out.stdout);
     assert!(stdout.contains("Recovery Difficulty:"));
 
-    fs::write(proj.join("README.md"), "# ExpProj\nSee [lib](src/lib.rs).\n").unwrap();
-    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "expproj"]);
+    fs::write(
+        proj.join("README.md"),
+        "# ExpProj\nSee [lib](src/lib.rs).\n",
+    )
+    .unwrap();
+    assert_vos_ok(
+        &db,
+        &["index", proj.to_str().unwrap(), "--project", "expproj"],
+    );
 
     let graph_exp = assert_vos_ok(&db, &["graph", "expproj", "--experimental"]);
     assert!(graph_exp.contains("Experimental Hub Importance:"));
@@ -466,17 +514,43 @@ fn cli_json_output_and_why_experimental_blast_radius_work_end_to_end() {
     let db = tmp.path().join("vos.db");
     let proj = tmp.path().join("jsonproj");
     fs::create_dir_all(proj.join("src")).unwrap();
-    fs::write(proj.join("README.md"), "# JsonProj\nSee [api](src/api.rs).\n").unwrap();
+    fs::write(
+        proj.join("README.md"),
+        "# JsonProj\nSee [api](src/api.rs).\n",
+    )
+    .unwrap();
     fs::write(proj.join("benchmark_output.txt"), "Run 1\nPass\n").unwrap();
     fs::write(proj.join("src/core.rs"), "pub fn core_fn() {}\n").unwrap();
-    fs::write(proj.join("src/api.rs"), "use crate::core;\npub fn call() {}\n").unwrap();
+    fs::write(
+        proj.join("src/api.rs"),
+        "use crate::core;\npub fn call() {}\n",
+    )
+    .unwrap();
     fs::write(proj.join("src/cli.rs"), "use crate::api;\n").unwrap();
 
-    let proj_json = assert_vos_ok(&db, &["project", "create", "jsonproj", proj.to_str().unwrap(), "--json"]);
+    let proj_json = assert_vos_ok(
+        &db,
+        &[
+            "project",
+            "create",
+            "jsonproj",
+            proj.to_str().unwrap(),
+            "--json",
+        ],
+    );
     let proj_val: serde_json::Value = serde_json::from_str(&proj_json).expect("project json");
     assert_eq!(proj_val["name"], "jsonproj");
 
-    let idx_json = assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "jsonproj", "--json"]);
+    let idx_json = assert_vos_ok(
+        &db,
+        &[
+            "index",
+            proj.to_str().unwrap(),
+            "--project",
+            "jsonproj",
+            "--json",
+        ],
+    );
     let idx_val: serde_json::Value = serde_json::from_str(&idx_json).expect("index json");
     assert_eq!(idx_val["added"], 5);
 
@@ -489,11 +563,24 @@ fn cli_json_output_and_why_experimental_blast_radius_work_end_to_end() {
     let why_base = assert_vos_ok(&db, &["why", "core.rs", "--project", "jsonproj"]);
     assert!(!why_base.contains("Experimental Blast Radius:"));
 
-    let why_exp = assert_vos_ok(&db, &["why", "core.rs", "--project", "jsonproj", "--experimental"]);
+    let why_exp = assert_vos_ok(
+        &db,
+        &["why", "core.rs", "--project", "jsonproj", "--experimental"],
+    );
     assert!(why_exp.contains("Experimental Blast Radius:"));
     assert!(why_exp.contains("Dependents: 1 direct / 3 transitive"));
 
-    let why_json = assert_vos_ok(&db, &["why", "core.rs", "--project", "jsonproj", "--experimental", "--json"]);
+    let why_json = assert_vos_ok(
+        &db,
+        &[
+            "why",
+            "core.rs",
+            "--project",
+            "jsonproj",
+            "--experimental",
+            "--json",
+        ],
+    );
     let why_val: serde_json::Value = serde_json::from_str(&why_json).expect("why json");
     assert_eq!(why_val["experimental_impact"]["direct_dependents"], 1);
     assert_eq!(why_val["experimental_impact"]["transitive_dependents"], 3);
@@ -508,7 +595,15 @@ fn cli_json_output_and_why_experimental_blast_radius_work_end_to_end() {
 
     assert_vos_ok(
         &db,
-        &["session", "stop", "jsonproj", "--quality", "5", "--note", "Next: finalize CLI"],
+        &[
+            "session",
+            "stop",
+            "jsonproj",
+            "--quality",
+            "5",
+            "--note",
+            "Next: finalize CLI",
+        ],
     );
 
     let cont_base = assert_vos_ok(&db, &["continue", "jsonproj"]);
@@ -542,7 +637,8 @@ fn cli_all_index_status_and_live_snapshot_diff_work_end_to_end() {
     assert_eq!(idx_val["total_added"], 3);
 
     let st_all_json = assert_vos_ok(&db, &["status", "--all", "--experimental", "--json"]);
-    let st_arr: Vec<serde_json::Value> = serde_json::from_str(&st_all_json).expect("status --all json");
+    let st_arr: Vec<serde_json::Value> =
+        serde_json::from_str(&st_all_json).expect("status --all json");
     assert_eq!(st_arr.len(), 2);
     assert!(st_arr[0]["recovery_prediction"]["difficulty"].is_string());
 
@@ -557,7 +653,8 @@ fn cli_all_index_status_and_live_snapshot_diff_work_end_to_end() {
     assert!(live_diff.contains("New pending work (1):"));
 
     let snaps_json = assert_vos_ok(&db, &["snapshots", "alpha", "--json"]);
-    let snaps_arr: Vec<serde_json::Value> = serde_json::from_str(&snaps_json).expect("snapshots json");
+    let snaps_arr: Vec<serde_json::Value> =
+        serde_json::from_str(&snaps_json).expect("snapshots json");
     assert_eq!(snaps_arr.len(), 1);
 }
 
@@ -570,11 +667,26 @@ fn cli_session_stop_auto_reindexes_disk_edits_unless_no_index_is_set() {
     fs::write(proj.join("README.md"), "# SessProj\n").unwrap();
     fs::write(proj.join("src/lib.rs"), "pub fn v1() {}\n").unwrap();
 
-    assert_vos_ok(&db, &["project", "create", "sessproj", proj.to_str().unwrap()]);
-    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "sessproj"]);
+    assert_vos_ok(
+        &db,
+        &["project", "create", "sessproj", proj.to_str().unwrap()],
+    );
+    assert_vos_ok(
+        &db,
+        &["index", proj.to_str().unwrap(), "--project", "sessproj"],
+    );
     std::thread::sleep(std::time::Duration::from_millis(1050));
 
-    assert_vos_ok(&db, &["session", "start", "sessproj", "--note", "auto-refresh test"]);
+    assert_vos_ok(
+        &db,
+        &[
+            "session",
+            "start",
+            "sessproj",
+            "--note",
+            "auto-refresh test",
+        ],
+    );
     // Sleep across a 1-second boundary so file mtime and index event strictly follow started_at.
     std::thread::sleep(std::time::Duration::from_millis(1050));
     fs::write(proj.join("src/new_mod.rs"), "pub fn added() {}\n").unwrap();
@@ -595,9 +707,18 @@ fn cli_session_stop_auto_reindexes_disk_edits_unless_no_index_is_set() {
 
     let stop_no_idx = assert_vos_ok(
         &db,
-        &["session", "stop", "sessproj", "--no-index", "--quality", "4", "--json"],
+        &[
+            "session",
+            "stop",
+            "sessproj",
+            "--no-index",
+            "--quality",
+            "4",
+            "--json",
+        ],
     );
-    let val_no_idx: serde_json::Value = serde_json::from_str(&stop_no_idx).expect("stop no-index json");
+    let val_no_idx: serde_json::Value =
+        serde_json::from_str(&stop_no_idx).expect("stop no-index json");
     assert_eq!(val_no_idx["files_changed_count"], 0);
 }
 
@@ -624,7 +745,8 @@ fn cli_show_tag_and_untag_disambiguate_with_project_flag() {
 
     assert_vos_ok(&db, &["untag", "lib.rs", "--project", "repo1", "api"]);
     let after_untag = assert_vos_ok(&db, &["show", "lib.rs", "--project", "repo1", "--json"]);
-    let after_val: serde_json::Value = serde_json::from_str(&after_untag).expect("show json after untag");
+    let after_val: serde_json::Value =
+        serde_json::from_str(&after_untag).expect("show json after untag");
     assert_eq!(after_val["tags"].as_array().unwrap().len(), 1);
     assert_eq!(after_val["tags"][0][0], "core");
 
@@ -633,22 +755,57 @@ fn cli_show_tag_and_untag_disambiguate_with_project_flag() {
     assert_eq!(tags_arr.len(), 1);
     assert_eq!(tags_arr[0]["tag"], "core");
 
-    let by_tag_json = assert_vos_ok(&db, &["search", "--tag", "core", "--project", "repo1", "--json"]);
-    let by_tag_arr: Vec<serde_json::Value> = serde_json::from_str(&by_tag_json).expect("search --tag json");
+    let by_tag_json = assert_vos_ok(
+        &db,
+        &["search", "--tag", "core", "--project", "repo1", "--json"],
+    );
+    let by_tag_arr: Vec<serde_json::Value> =
+        serde_json::from_str(&by_tag_json).expect("search --tag json");
     assert_eq!(by_tag_arr.len(), 1);
     assert_eq!(by_tag_arr[0]["title"], "lib.rs");
 
-    let by_q_tag = assert_vos_ok(&db, &["search", "one", "--tag", "core", "--project", "repo1", "--json"]);
-    let by_q_arr: Vec<serde_json::Value> = serde_json::from_str(&by_q_tag).expect("search query --tag json");
+    let by_q_tag = assert_vos_ok(
+        &db,
+        &[
+            "search",
+            "one",
+            "--tag",
+            "core",
+            "--project",
+            "repo1",
+            "--json",
+        ],
+    );
+    let by_q_arr: Vec<serde_json::Value> =
+        serde_json::from_str(&by_q_tag).expect("search query --tag json");
     assert_eq!(by_q_arr.len(), 1);
 
-    let by_kind_code = assert_vos_ok(&db, &["search", "--kind", "code", "--project", "repo1", "--json"]);
-    let kind_arr: Vec<serde_json::Value> = serde_json::from_str(&by_kind_code).expect("search --kind json");
+    let by_kind_code = assert_vos_ok(
+        &db,
+        &["search", "--kind", "code", "--project", "repo1", "--json"],
+    );
+    let kind_arr: Vec<serde_json::Value> =
+        serde_json::from_str(&by_kind_code).expect("search --kind json");
     assert_eq!(kind_arr.len(), 1);
     assert_eq!(kind_arr[0]["kind"], "Code");
 
-    let by_kind_note = assert_vos_ok(&db, &["search", "one", "--kind", "note", "--project", "repo1", "--json"]);
-    assert!(serde_json::from_str::<Vec<serde_json::Value>>(&by_kind_note).unwrap().is_empty());
+    let by_kind_note = assert_vos_ok(
+        &db,
+        &[
+            "search",
+            "one",
+            "--kind",
+            "note",
+            "--project",
+            "repo1",
+            "--json",
+        ],
+    );
+    assert!(
+        serde_json::from_str::<Vec<serde_json::Value>>(&by_kind_note)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -660,14 +817,25 @@ fn cli_project_remove_purges_objects_fts_snapshots_and_sessions() {
     fs::write(p1.join("README.md"), "# TempProj unique_marker_xyz\n").unwrap();
     fs::write(p1.join("src/lib.rs"), "pub fn unique_fn_xyz() {}\n").unwrap();
 
-    assert_vos_ok(&db, &["project", "create", "tempproj", p1.to_str().unwrap()]);
-    assert_vos_ok(&db, &["index", p1.to_str().unwrap(), "--project", "tempproj"]);
+    assert_vos_ok(
+        &db,
+        &["project", "create", "tempproj", p1.to_str().unwrap()],
+    );
+    assert_vos_ok(
+        &db,
+        &["index", p1.to_str().unwrap(), "--project", "tempproj"],
+    );
     assert_vos_ok(&db, &["snapshot", "tempproj", "--label", "tmp"]);
     assert_vos_ok(&db, &["session", "start", "tempproj"]);
     assert_vos_ok(&db, &["session", "stop", "tempproj", "--quality", "4"]);
 
     let pre_hits = assert_vos_ok(&db, &["search", "unique_marker_xyz", "--json"]);
-    assert_eq!(serde_json::from_str::<Vec<serde_json::Value>>(&pre_hits).unwrap().len(), 1);
+    assert_eq!(
+        serde_json::from_str::<Vec<serde_json::Value>>(&pre_hits)
+            .unwrap()
+            .len(),
+        1
+    );
 
     let rm_out = assert_vos_ok(&db, &["project", "remove", "tempproj", "--json"]);
     let rm_val: serde_json::Value = serde_json::from_str(&rm_out).expect("remove json");
@@ -676,11 +844,23 @@ fn cli_project_remove_purges_objects_fts_snapshots_and_sessions() {
 
     // Ensure FTS5, snapshots, and sessions have no orphaned entries.
     let post_hits = assert_vos_ok(&db, &["search", "unique_marker_xyz", "--json"]);
-    assert!(serde_json::from_str::<Vec<serde_json::Value>>(&post_hits).unwrap().is_empty());
+    assert!(
+        serde_json::from_str::<Vec<serde_json::Value>>(&post_hits)
+            .unwrap()
+            .is_empty()
+    );
     let snaps = assert_vos_ok(&db, &["snapshots", "--json"]);
-    assert!(serde_json::from_str::<Vec<serde_json::Value>>(&snaps).unwrap().is_empty());
+    assert!(
+        serde_json::from_str::<Vec<serde_json::Value>>(&snaps)
+            .unwrap()
+            .is_empty()
+    );
     let sess = assert_vos_ok(&db, &["session", "list", "--json"]);
-    assert!(serde_json::from_str::<Vec<serde_json::Value>>(&sess).unwrap().is_empty());
+    assert!(
+        serde_json::from_str::<Vec<serde_json::Value>>(&sess)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -691,8 +871,14 @@ fn cli_doctor_reports_healthy_index_and_missing_root_paths() {
     fs::create_dir_all(proj.join("src")).unwrap();
     fs::write(proj.join("README.md"), "# DocCli\n").unwrap();
 
-    assert_vos_ok(&db, &["project", "create", "doccli", proj.to_str().unwrap()]);
-    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "doccli"]);
+    assert_vos_ok(
+        &db,
+        &["project", "create", "doccli", proj.to_str().unwrap()],
+    );
+    assert_vos_ok(
+        &db,
+        &["index", proj.to_str().unwrap(), "--project", "doccli"],
+    );
 
     let doc_json = assert_vos_ok(&db, &["doctor", "--json"]);
     let doc_val: serde_json::Value = serde_json::from_str(&doc_json).expect("doctor json");
@@ -712,10 +898,20 @@ fn cli_since_supports_hours_weeks_today_and_yesterday() {
     let db = tmp.path().join("vos.db");
     let proj = tmp.path().join("sinceproj");
     fs::create_dir_all(proj.join("src")).unwrap();
-    fs::write(proj.join("src").join("lib.rs"), "pub fn tick() -> u32 { 1 }\n").unwrap();
+    fs::write(
+        proj.join("src").join("lib.rs"),
+        "pub fn tick() -> u32 { 1 }\n",
+    )
+    .unwrap();
 
-    assert_vos_ok(&db, &["project", "create", "sinceproj", proj.to_str().unwrap()]);
-    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "sinceproj"]);
+    assert_vos_ok(
+        &db,
+        &["project", "create", "sinceproj", proj.to_str().unwrap()],
+    );
+    assert_vos_ok(
+        &db,
+        &["index", proj.to_str().unwrap(), "--project", "sinceproj"],
+    );
 
     for since_arg in ["12h", "2w", "today", "yesterday"] {
         let cs_out = assert_vos_ok(&db, &["changed-since", since_arg, "sinceproj", "--json"]);
@@ -723,7 +919,10 @@ fn cli_since_supports_hours_weeks_today_and_yesterday() {
         assert_eq!(cs_val["since_label"], since_arg);
         assert!(!cs_val["added"].as_array().unwrap().is_empty());
 
-        let evo_out = assert_vos_ok(&db, &["evolution", "sinceproj", "--since", since_arg, "--json"]);
+        let evo_out = assert_vos_ok(
+            &db,
+            &["evolution", "sinceproj", "--since", since_arg, "--json"],
+        );
         let evo_val: serde_json::Value = serde_json::from_str(&evo_out).expect("evolution json");
         assert_eq!(evo_val["project"]["name"], "sinceproj");
         assert_eq!(evo_val["since_label"], since_arg);
@@ -753,8 +952,12 @@ fn cli_snapshot_all_captures_all_projects_and_rejects_conflicting_args() {
     assert_vos_ok(&db, &["project", "create", "beta", p_b.to_str().unwrap()]);
     assert_vos_ok(&db, &["index", "--all"]);
 
-    let snap_json = assert_vos_ok(&db, &["snapshot", "--all", "--label", "pre-break", "--json"]);
-    let snaps: Vec<serde_json::Value> = serde_json::from_str(&snap_json).expect("snapshot all json");
+    let snap_json = assert_vos_ok(
+        &db,
+        &["snapshot", "--all", "--label", "pre-break", "--json"],
+    );
+    let snaps: Vec<serde_json::Value> =
+        serde_json::from_str(&snap_json).expect("snapshot all json");
     assert_eq!(snaps.len(), 2);
     assert_eq!(snaps[0]["project_name"], "alpha");
     assert_eq!(snaps[1]["project_name"], "beta");
@@ -781,7 +984,10 @@ fn cli_drift_all_audits_portfolio_and_rejects_conflicting_args() {
     fs::create_dir_all(&clean).unwrap();
     fs::write(clean.join("README.md"), "# Clean\n").unwrap();
 
-    assert_vos_ok(&db, &["project", "create", "clean", clean.to_str().unwrap()]);
+    assert_vos_ok(
+        &db,
+        &["project", "create", "clean", clean.to_str().unwrap()],
+    );
     assert_vos_ok(&db, &["index", "--all"]);
 
     let all_out = assert_vos_ok(&db, &["drift", "--all"]);
@@ -803,14 +1009,29 @@ fn cli_search_since_filters_recent_and_supports_filter_only_mode() {
     let db = tmp.path().join("vos.db");
     let proj = tmp.path().join("recentsearch");
     fs::create_dir_all(proj.join("src")).unwrap();
-    fs::write(proj.join("src").join("cache.rs"), "pub fn warm_cache() {}\n").unwrap();
+    fs::write(
+        proj.join("src").join("cache.rs"),
+        "pub fn warm_cache() {}\n",
+    )
+    .unwrap();
 
-    assert_vos_ok(&db, &["project", "create", "recentsearch", proj.to_str().unwrap()]);
+    assert_vos_ok(
+        &db,
+        &["project", "create", "recentsearch", proj.to_str().unwrap()],
+    );
     assert_vos_ok(&db, &["index", "--all"]);
 
     let fts_hits = assert_vos_ok(
         &db,
-        &["search", "cache", "--since", "12h", "--project", "recentsearch", "--json"],
+        &[
+            "search",
+            "cache",
+            "--since",
+            "12h",
+            "--project",
+            "recentsearch",
+            "--json",
+        ],
     );
     let fts_arr: Vec<serde_json::Value> = serde_json::from_str(&fts_hits).expect("fts since json");
     assert_eq!(fts_arr.len(), 1);
@@ -818,9 +1039,17 @@ fn cli_search_since_filters_recent_and_supports_filter_only_mode() {
 
     let meta_hits = assert_vos_ok(
         &db,
-        &["search", "--since", "today", "--project", "recentsearch", "--json"],
+        &[
+            "search",
+            "--since",
+            "today",
+            "--project",
+            "recentsearch",
+            "--json",
+        ],
     );
-    let meta_arr: Vec<serde_json::Value> = serde_json::from_str(&meta_hits).expect("meta since json");
+    let meta_arr: Vec<serde_json::Value> =
+        serde_json::from_str(&meta_hits).expect("meta since json");
     assert_eq!(meta_arr.len(), 1);
 
     assert!(!run_vos(&db, &["search", "--since", "invalid-date"]).0);
@@ -832,7 +1061,11 @@ fn cli_benchmark_search_thresholds_pass_and_fail_cleanly() {
     let db = tmp.path().join("vos.db");
     let proj = tmp.path().join("benchproj");
     fs::create_dir_all(proj.join("src")).unwrap();
-    fs::write(proj.join("src").join("scheduler.rs"), "pub fn tick_scheduler() {}\n").unwrap();
+    fs::write(
+        proj.join("src").join("scheduler.rs"),
+        "pub fn tick_scheduler() {}\n",
+    )
+    .unwrap();
 
     let cfg = tmp.path().join("suite.yaml");
     fs::write(
@@ -841,7 +1074,10 @@ fn cli_benchmark_search_thresholds_pass_and_fail_cleanly() {
     )
     .unwrap();
 
-    assert_vos_ok(&db, &["project", "create", "benchproj", proj.to_str().unwrap()]);
+    assert_vos_ok(
+        &db,
+        &["project", "create", "benchproj", proj.to_str().unwrap()],
+    );
     assert_vos_ok(&db, &["index", "--all"]);
 
     let pass_json = assert_vos_ok(
@@ -887,7 +1123,10 @@ fn cli_project_update_preserves_sessions_when_moving_and_renaming() {
     fs::create_dir_all(&old_dir).unwrap();
     fs::write(old_dir.join("README.md"), "# MovedApp\n").unwrap();
 
-    assert_vos_ok(&db, &["project", "create", "oldapp", old_dir.to_str().unwrap()]);
+    assert_vos_ok(
+        &db,
+        &["project", "create", "oldapp", old_dir.to_str().unwrap()],
+    );
     assert_vos_ok(&db, &["index", "--all"]);
     assert_vos_ok(&db, &["session", "start", "oldapp"]);
     assert_vos_ok(&db, &["session", "stop", "oldapp", "--quality", "5"]);

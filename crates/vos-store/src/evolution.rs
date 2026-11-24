@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use rusqlite::params;
-use vos_core::{CoverageTier, DriftFinding, ObjectKind, ObjectRecord, ProjectDrift, ProjectEvolution, RiskLevel};
+use vos_core::{
+    CoverageTier, DriftFinding, ObjectKind, ObjectRecord, ProjectDrift, ProjectEvolution, RiskLevel,
+};
 
 use crate::queries::map_object_row;
 use crate::recovery::object_area;
@@ -246,7 +248,11 @@ impl Store {
             .iter()
             .filter(|o| {
                 o.kind == ObjectKind::Code
-                    && !o.path.replace('\\', "/").to_lowercase().contains("/.github/")
+                    && !o
+                        .path
+                        .replace('\\', "/")
+                        .to_lowercase()
+                        .contains("/.github/")
             })
             .collect();
 
@@ -255,7 +261,11 @@ impl Store {
 
         for task in pending_work.into_iter().take(8) {
             let task_raw = task.split_once(": ").map(|(_, rest)| rest).unwrap_or(&task);
-            let task_body = task_raw.split(" — *Status").next().unwrap_or(task_raw).trim();
+            let task_body = task_raw
+                .split(" — *Status")
+                .next()
+                .unwrap_or(task_raw)
+                .trim();
             let tokens: Vec<String> = extract_task_keywords(task_body)
                 .into_iter()
                 .filter(|t| *t != project_name_lower)
@@ -309,7 +319,8 @@ impl Store {
             .into_iter()
             .filter(|r| {
                 r.relation_count >= 3
-                    && (r.coverage_tier == CoverageTier::Underdocumented || r.level != RiskLevel::Low)
+                    && (r.coverage_tier == CoverageTier::Underdocumented
+                        || r.level != RiskLevel::Low)
             })
             .take(4)
             .collect();
@@ -365,10 +376,7 @@ fn extract_concept_tokens(obj: &ObjectRecord) -> HashSet<String> {
     }
 
     if let Some(ref summary) = obj.summary {
-        for raw in summary
-            .split(|c: char| !c.is_alphanumeric())
-            .take(30)
-        {
+        for raw in summary.split(|c: char| !c.is_alphanumeric()).take(30) {
             push_if_meaningful(raw, &mut tokens);
         }
     }
@@ -422,7 +430,6 @@ fn push_if_meaningful(raw: &str, out: &mut HashSet<String>) {
     }
     out.insert(lower);
 }
-
 
 fn tokenize_identifier(raw: &str) -> HashSet<String> {
     let mut out = HashSet::new();
@@ -488,8 +495,8 @@ fn extract_task_keywords(task: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use vos_core::util::now_unix;
     use vos_core::ObjectKind;
+    use vos_core::util::now_unix;
 
     use super::*;
     use crate::UpsertObjectInput;
@@ -549,11 +556,20 @@ mod tests {
             .project_evolution("demo", now - 7 * 86_400, "7d")
             .unwrap();
         assert_eq!(evo.added_count, 1);
-        assert!(evo.new_active_areas.iter().any(|a| a.contains("repo/transformer")));
+        assert!(
+            evo.new_active_areas
+                .iter()
+                .any(|a| a.contains("repo/transformer"))
+        );
         assert!(evo.inactive_areas.iter().any(|a| a.contains("repo/legacy")));
 
         let drift = store.project_drift("demo").unwrap();
-        assert!(drift.findings.iter().any(|f| f.kind == "documentation drift"));
+        assert!(
+            drift
+                .findings
+                .iter()
+                .any(|f| f.kind == "documentation drift")
+        );
         assert!(drift.findings.iter().any(|f| f.kind == "roadmap drift"));
 
         // Ensure strict token matching does not conflate "Intel" with "intelligence.rs".
@@ -589,10 +605,12 @@ mod tests {
         batch2.commit().unwrap();
 
         let drift2 = store.project_drift("demo").unwrap();
-        assert!(!drift2
-            .findings
-            .iter()
-            .any(|f| f.evidence.iter().any(|ev| ev.contains("intelligence.rs"))));
+        assert!(
+            !drift2
+                .findings
+                .iter()
+                .any(|f| f.evidence.iter().any(|ev| ev.contains("intelligence.rs")))
+        );
     }
 
     #[test]
@@ -621,7 +639,12 @@ mod tests {
         batch.commit().unwrap();
 
         let drift = store.project_drift("cfg").unwrap();
-        assert!(!drift.findings.iter().any(|f| f.kind == "documentation drift"));
+        assert!(
+            !drift
+                .findings
+                .iter()
+                .any(|f| f.kind == "documentation drift")
+        );
     }
 
     #[test]
@@ -687,8 +710,3 @@ mod tests {
         assert!(reports[1].findings.is_empty());
     }
 }
-
-
-
-
-

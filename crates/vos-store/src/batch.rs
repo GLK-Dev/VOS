@@ -117,13 +117,22 @@ impl<'conn> IndexBatch<'conn> {
                 touch_project(&self.tx, input.project_id.as_deref(), self.now)?;
                 UpsertOutcome::Added(obj_id)
             }
-            Some((obj_id, existing_proj, existing_hash, is_deleted, existing_noise, existing_kind)) => {
+            Some((
+                obj_id,
+                existing_proj,
+                existing_hash,
+                is_deleted,
+                existing_noise,
+                existing_kind,
+            )) => {
                 let was_deleted = is_deleted != 0;
                 if !was_deleted
                     && existing_hash == input.content_hash
                     && existing_proj == input.project_id
                 {
-                    if (existing_noise != 0) != input.is_noise || existing_kind != input.kind.as_str() {
+                    if (existing_noise != 0) != input.is_noise
+                        || existing_kind != input.kind.as_str()
+                    {
                         let mut stmt = self.tx.prepare_cached(
                             "UPDATE objects SET is_noise = ?1, kind = ?2 WHERE id = ?3",
                         )?;
@@ -220,9 +229,9 @@ impl<'conn> IndexBatch<'conn> {
         let mut deleted_count = 0_usize;
         for (obj_id, obj_project_id, path) in candidates {
             if is_path_within(&path, scope_path) && !seen_paths.contains(&path) {
-                let mut upd = self
-                    .tx
-                    .prepare_cached("UPDATE objects SET is_deleted = 1, deleted_at = ?1 WHERE id = ?2")?;
+                let mut upd = self.tx.prepare_cached(
+                    "UPDATE objects SET is_deleted = 1, deleted_at = ?1 WHERE id = ?2",
+                )?;
                 upd.execute(params![self.now, obj_id])?;
 
                 let mut del_rel = self
@@ -342,4 +351,3 @@ pub(crate) fn touch_project(
     }
     Ok(())
 }
-

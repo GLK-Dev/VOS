@@ -7,8 +7,8 @@ use anyhow::Result;
 use chrono::{DateTime, Local, NaiveDate, TimeZone};
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
-use vos_core::{GraphDirection, GraphTreeNode, ObjectKind};
 use vos_core::util::now_unix;
+use vos_core::{GraphDirection, GraphTreeNode, ObjectKind};
 use vos_indexer::{IndexOptions, index_path_with_options};
 use vos_store::{SearchFilters, Store, load_benchmark_cases};
 
@@ -479,8 +479,8 @@ fn main() -> Result<()> {
                 }
                 print_all_index_report(&batch);
             } else {
-                let target_path = path
-                    .ok_or_else(|| anyhow::anyhow!("provide a path to index or pass --all"))?;
+                let target_path =
+                    path.ok_or_else(|| anyhow::anyhow!("provide a path to index or pass --all"))?;
                 let report = index_path_with_options(
                     &mut store,
                     &target_path,
@@ -545,8 +545,14 @@ fn main() -> Result<()> {
                 "Project: {}",
                 details.project_name.as_deref().unwrap_or("-")
             );
-            println!("Status: {}", if obj.is_deleted { "deleted" } else { "active" });
-            println!("Size:   {} bytes | Chunks: {}", obj.size_bytes, details.chunk_count);
+            println!(
+                "Status: {}",
+                if obj.is_deleted { "deleted" } else { "active" }
+            );
+            println!(
+                "Size:   {} bytes | Chunks: {}",
+                obj.size_bytes, details.chunk_count
+            );
             println!("Hash:   {}", obj.content_hash);
             println!("Modified: {}", format_ts(obj.modified_at));
             println!("Indexed:  {}", format_ts(obj.indexed_at));
@@ -571,7 +577,12 @@ fn main() -> Result<()> {
             if json {
                 return print_json(&obj);
             }
-            println!("Tagged '{}' ({}) with: {}", obj.title, obj.id, tags.join(", "));
+            println!(
+                "Tagged '{}' ({}) with: {}",
+                obj.title,
+                obj.id,
+                tags.join(", ")
+            );
         }
         Commands::Untag {
             target,
@@ -582,7 +593,12 @@ fn main() -> Result<()> {
             if json {
                 return print_json(&obj);
             }
-            println!("Untagged '{}' ({}) of: {}", obj.title, obj.id, tags.join(", "));
+            println!(
+                "Untagged '{}' ({}) of: {}",
+                obj.title,
+                obj.id,
+                tags.join(", ")
+            );
         }
         Commands::Tags { project, limit } => {
             let items = store.list_tags(project.as_deref(), limit)?;
@@ -817,7 +833,10 @@ fn main() -> Result<()> {
                 println!("  {}", evo.emerging_concepts.join(", "));
             }
 
-            println!("\nDocumentation coverage:\n  {}", evo.documentation_coverage);
+            println!(
+                "\nDocumentation coverage:\n  {}",
+                evo.documentation_coverage
+            );
             println!(
                 "\nSignals:\n  Open questions: {}\n  Pending work:   {}",
                 evo.open_questions_count, evo.pending_work_count
@@ -840,8 +859,8 @@ fn main() -> Result<()> {
                 print_all_statuses(&rows);
                 return Ok(());
             }
-            let project = project
-                .ok_or_else(|| anyhow::anyhow!("provide a project name or pass --all"))?;
+            let project =
+                project.ok_or_else(|| anyhow::anyhow!("provide a project name or pass --all"))?;
             let st = store.project_status(&project)?;
             let prediction = if experimental {
                 Some(store.predict_recovery_difficulty(&st))
@@ -855,7 +874,10 @@ fn main() -> Result<()> {
                 });
             }
             let root_prefix = st.project.root_path.as_deref().unwrap_or("");
-            println!("Project: {} ({} active, {} deleted)", st.project.name, st.active_objects, st.deleted_objects);
+            println!(
+                "Project: {} ({} active, {} deleted)",
+                st.project.name, st.active_objects, st.deleted_objects
+            );
             println!("\nHealth: {}", st.health);
             println!("Critical Risks: {}", st.critical_risk_count);
             println!("High Risks: {}", st.high_risk_count);
@@ -1033,7 +1055,8 @@ fn main() -> Result<()> {
                     println!("  ... and {} more", report.deleted.len() - 25);
                 }
             }
-        }        Commands::Continue { project } => {
+        }
+        Commands::Continue { project } => {
             let cont = store.project_continue(&project)?;
             let prediction = if experimental {
                 let st = store.project_status(&project)?;
@@ -1049,7 +1072,10 @@ fn main() -> Result<()> {
             }
             let res = &cont.resume;
             let root_prefix = res.project.root_path.as_deref().unwrap_or("");
-            println!("Project: {} ({} active objects)", res.project.name, res.active_objects);
+            println!(
+                "Project: {} ({} active objects)",
+                res.project.name, res.active_objects
+            );
 
             println!("\nLast activity:");
             match res.last_activity_at {
@@ -1106,14 +1132,20 @@ fn main() -> Result<()> {
             if !cont.ownership_areas.is_empty() {
                 println!("\nOwnership hotspots (events):");
                 for area in cont.ownership_areas.iter().take(4) {
-                    println!("  - {} ({} files, {} events)", area.area, area.file_count, area.event_count);
+                    println!(
+                        "  - {} ({} files, {} events)",
+                        area.area, area.file_count, area.event_count
+                    );
                 }
             }
 
             if !cont.coverage_warnings.is_empty() {
                 println!("\nCoverage warnings (underdocumented):");
                 for cov in cont.coverage_warnings.iter().take(4) {
-                    println!("  - {} ({} code files, 0 docs/refs)", cov.area, cov.code_files);
+                    println!(
+                        "  - {} ({} code files, 0 docs/refs)",
+                        cov.area, cov.code_files
+                    );
                 }
             }
 
@@ -1151,7 +1183,10 @@ fn main() -> Result<()> {
             }
             let res = &start.resume;
             let root_prefix = res.project.root_path.as_deref().unwrap_or("");
-            println!("Project: {} ({} active objects)", res.project.name, res.active_objects);
+            println!(
+                "Project: {} ({} active objects)",
+                res.project.name, res.active_objects
+            );
 
             println!("\nLast active:");
             match res.last_activity_at {
@@ -1164,7 +1199,11 @@ fn main() -> Result<()> {
                 println!("  (none)");
             } else {
                 for (idx, obj) in res.starting_points.iter().enumerate() {
-                    println!("  {}. {}", idx + 1, display_relative(&obj.path, root_prefix));
+                    println!(
+                        "  {}. {}",
+                        idx + 1,
+                        display_relative(&obj.path, root_prefix)
+                    );
                 }
             }
 
@@ -1204,13 +1243,17 @@ fn main() -> Result<()> {
                     println!("  - {q}");
                 }
             }
-        }        Commands::Resume { project } => {
+        }
+        Commands::Resume { project } => {
             let res = store.project_resume(&project)?;
             if json {
                 return print_json(&res);
             }
             let root_prefix = res.project.root_path.as_deref().unwrap_or("");
-            println!("Project: {} ({} active objects)", res.project.name, res.active_objects);
+            println!(
+                "Project: {} ({} active objects)",
+                res.project.name, res.active_objects
+            );
 
             println!("\nLast activity:");
             match res.last_activity_at {
@@ -1408,13 +1451,8 @@ fn main() -> Result<()> {
             depth,
             limit,
         } => {
-            let graph = store.project_graph(
-                &project,
-                target.as_deref(),
-                direction.into(),
-                depth,
-                limit,
-            )?;
+            let graph =
+                store.project_graph(&project, target.as_deref(), direction.into(), depth, limit)?;
             let hub_importance = if experimental {
                 Some(store.experimental_hub_importance(&project, limit)?)
             } else {
@@ -1633,7 +1671,11 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Snapshot { project, all, label } => handle_snapshot(&store, project, all, label, json)?,
+        Commands::Snapshot {
+            project,
+            all,
+            label,
+        } => handle_snapshot(&store, project, all, label, json)?,
         Commands::Snapshots { project, limit } => {
             let snaps = store.list_snapshots(project.as_deref(), limit)?;
             if json {
@@ -1675,7 +1717,11 @@ fn main() -> Result<()> {
                 return print_json(&diff);
             }
             let target_label = if diff.to.id == 0 {
-                format!("LIVE ({}, {})", diff.to.project_name, format_ts(diff.to.created_at))
+                format!(
+                    "LIVE ({}, {})",
+                    diff.to.project_name,
+                    format_ts(diff.to.created_at)
+                )
             } else {
                 format!(
                     "#{} ({}, {})",
@@ -1692,10 +1738,22 @@ fn main() -> Result<()> {
                 target_label
             );
             println!("\nMetrics Delta:");
-            println!("  Health:         {} -> {}", diff.from.health, diff.to.health);
-            println!("  Active Files:   {} ({:+})", diff.to.active_objects, diff.active_delta);
-            println!("  Deleted Files:  {} ({:+})", diff.to.deleted_objects, diff.deleted_delta);
-            println!("  Relations:      {} ({:+})", diff.to.relations_count, diff.relations_delta);
+            println!(
+                "  Health:         {} -> {}",
+                diff.from.health, diff.to.health
+            );
+            println!(
+                "  Active Files:   {} ({:+})",
+                diff.to.active_objects, diff.active_delta
+            );
+            println!(
+                "  Deleted Files:  {} ({:+})",
+                diff.to.deleted_objects, diff.deleted_delta
+            );
+            println!(
+                "  Relations:      {} ({:+})",
+                diff.to.relations_count, diff.relations_delta
+            );
             println!(
                 "  Coverage Ratio: {:.1}% ({:+.1}%)",
                 diff.to.coverage_ratio, diff.coverage_delta
@@ -1704,7 +1762,10 @@ fn main() -> Result<()> {
                 "  Critical Risks: {} ({:+})",
                 diff.to.critical_risks, diff.critical_risks_delta
             );
-            println!("  High Risks:     {} ({:+})", diff.to.high_risks, diff.high_risks_delta);
+            println!(
+                "  High Risks:     {} ({:+})",
+                diff.to.high_risks, diff.high_risks_delta
+            );
 
             if !diff.added_pending_work.is_empty() {
                 println!("\nNew pending work ({}):", diff.added_pending_work.len());
@@ -1713,7 +1774,10 @@ fn main() -> Result<()> {
                 }
             }
             if !diff.resolved_pending_work.is_empty() {
-                println!("\nResolved pending work ({}):", diff.resolved_pending_work.len());
+                println!(
+                    "\nResolved pending work ({}):",
+                    diff.resolved_pending_work.len()
+                );
                 for item in &diff.resolved_pending_work {
                     println!("  - {item}");
                 }
@@ -1745,9 +1809,16 @@ fn main() -> Result<()> {
             }
             println!(
                 "VOS Doctor: {}",
-                if report.healthy { "HEALTHY" } else { "ISSUES DETECTED" }
+                if report.healthy {
+                    "HEALTHY"
+                } else {
+                    "ISSUES DETECTED"
+                }
             );
-            println!("  SQLite check:       {} ({})", report.sqlite_ok, report.sqlite_detail);
+            println!(
+                "  SQLite check:       {} ({})",
+                report.sqlite_ok, report.sqlite_detail
+            );
             println!(
                 "  Objects FTS5 parity: {} / {}",
                 report.objects_fts_count, report.objects_count
@@ -1843,7 +1914,9 @@ fn handle_project(store: &mut Store, action: ProjectCommands, json: bool) -> Res
                 println!("Description: {desc}");
             }
             if path_changed {
-                println!("Hint: run `vos index --all` to re-index files under the updated root path.");
+                println!(
+                    "Hint: run `vos index --all` to re-index files under the updated root path."
+                );
             }
         }
         ProjectCommands::Remove { name } => {
@@ -1942,118 +2015,122 @@ fn handle_search(
 
 #[inline(never)]
 fn handle_drift(store: &Store, project: Option<String>, all: bool, json: bool) -> Result<()> {
-        if all && project.is_some() {
-            anyhow::bail!("pass either a project name or --all, not both");
-        }
-        if all {
-            let reports = store.all_project_drifts()?;
-            if json {
-                return print_json(&reports);
-            }
-            if reports.is_empty() {
-                println!("No projects registered yet.");
-            } else {
-                let mut total_findings = 0_usize;
-                for drift in &reports {
-                    let count = drift.findings.len();
-                    total_findings += count;
-                    println!("{:<14} | {} finding(s)", drift.project.name, count);
-                    for finding in &drift.findings {
-                        println!("  - [{}] {}", finding.kind, finding.summary);
-                    }
-                }
-                println!(
-                    "\nChecked {} project(s): {} total drift finding(s).",
-                    reports.len(),
-                    total_findings
-                );
-            }
-            return Ok(());
-        }
-        let project =
-            project.ok_or_else(|| anyhow::anyhow!("provide a project name or pass --all"))?;
-        let drift = store.project_drift(&project)?;
+    if all && project.is_some() {
+        anyhow::bail!("pass either a project name or --all, not both");
+    }
+    if all {
+        let reports = store.all_project_drifts()?;
         if json {
-            return print_json(&drift);
+            return print_json(&reports);
         }
-        println!("Drift report: {}", drift.project.name);
-        if drift.findings.is_empty() {
-            println!("  No documentation or roadmap drift detected.");
+        if reports.is_empty() {
+            println!("No projects registered yet.");
         } else {
-            for finding in &drift.findings {
-                println!("\n[{}] {}", finding.kind, finding.summary);
-                for ev in &finding.evidence {
-                    println!("  - {ev}");
+            let mut total_findings = 0_usize;
+            for drift in &reports {
+                let count = drift.findings.len();
+                total_findings += count;
+                println!("{:<14} | {} finding(s)", drift.project.name, count);
+                for finding in &drift.findings {
+                    println!("  - [{}] {}", finding.kind, finding.summary);
                 }
             }
+            println!(
+                "\nChecked {} project(s): {} total drift finding(s).",
+                reports.len(),
+                total_findings
+            );
         }
+        return Ok(());
+    }
+    let project = project.ok_or_else(|| anyhow::anyhow!("provide a project name or pass --all"))?;
+    let drift = store.project_drift(&project)?;
+    if json {
+        return print_json(&drift);
+    }
+    println!("Drift report: {}", drift.project.name);
+    if drift.findings.is_empty() {
+        println!("  No documentation or roadmap drift detected.");
+    } else {
+        for finding in &drift.findings {
+            println!("\n[{}] {}", finding.kind, finding.summary);
+            for ev in &finding.evidence {
+                println!("  - {ev}");
+            }
+        }
+    }
     Ok(())
 }
 
 #[inline(never)]
-fn handle_snapshot(store: &Store, project: Option<String>, all: bool, label: Option<String>, json: bool) -> Result<()> {
-        if all && project.is_some() {
-            anyhow::bail!("pass either a project name or --all, not both");
-        }
-        if all {
-            let snaps = store.save_all_snapshots(label.as_deref())?;
-            if json {
-                return print_json(&snaps);
-            }
-            if snaps.is_empty() {
-                println!("No projects registered.");
-            } else {
-                for s in &snaps {
-                    let lbl = s
-                        .label
-                        .as_deref()
-                        .map(|l| format!(" [{l}]"))
-                        .unwrap_or_default();
-                    println!(
-                        "#{:<3} | {:<12} | {} | files: {} | rels: {} | cov: {:.1}% | crit: {} high: {}{}",
-                        s.id,
-                        s.project_name,
-                        s.health,
-                        s.active_objects,
-                        s.relations_count,
-                        s.coverage_ratio,
-                        s.critical_risks,
-                        s.high_risks,
-                        lbl
-                    );
-                }
-                println!("Saved {} snapshot(s).", snaps.len());
-            }
-            return Ok(());
-        }
-        let project = project
-            .ok_or_else(|| anyhow::anyhow!("provide a project name or pass --all"))?;
-        let snap = store.save_snapshot(&project, label.as_deref())?;
+fn handle_snapshot(
+    store: &Store,
+    project: Option<String>,
+    all: bool,
+    label: Option<String>,
+    json: bool,
+) -> Result<()> {
+    if all && project.is_some() {
+        anyhow::bail!("pass either a project name or --all, not both");
+    }
+    if all {
+        let snaps = store.save_all_snapshots(label.as_deref())?;
         if json {
-            return print_json(&snap);
+            return print_json(&snaps);
         }
-        let lbl = snap
-            .label
-            .as_deref()
-            .map(|l| format!(" [{l}]"))
-            .unwrap_or_default();
-        println!(
-            "Saved snapshot #{}{} for '{}' at {}",
-            snap.id,
-            lbl,
-            snap.project_name,
-            format_ts(snap.created_at)
-        );
-        println!(
-            "  Health: {} | Files: {} | Relations: {} | Coverage: {:.1}% ({}) | Crit: {} | High: {}",
-            snap.health,
-            snap.active_objects,
-            snap.relations_count,
-            snap.coverage_ratio,
-            snap.documentation_health,
-            snap.critical_risks,
-            snap.high_risks
-        );
+        if snaps.is_empty() {
+            println!("No projects registered.");
+        } else {
+            for s in &snaps {
+                let lbl = s
+                    .label
+                    .as_deref()
+                    .map(|l| format!(" [{l}]"))
+                    .unwrap_or_default();
+                println!(
+                    "#{:<3} | {:<12} | {} | files: {} | rels: {} | cov: {:.1}% | crit: {} high: {}{}",
+                    s.id,
+                    s.project_name,
+                    s.health,
+                    s.active_objects,
+                    s.relations_count,
+                    s.coverage_ratio,
+                    s.critical_risks,
+                    s.high_risks,
+                    lbl
+                );
+            }
+            println!("Saved {} snapshot(s).", snaps.len());
+        }
+        return Ok(());
+    }
+    let project = project.ok_or_else(|| anyhow::anyhow!("provide a project name or pass --all"))?;
+    let snap = store.save_snapshot(&project, label.as_deref())?;
+    if json {
+        return print_json(&snap);
+    }
+    let lbl = snap
+        .label
+        .as_deref()
+        .map(|l| format!(" [{l}]"))
+        .unwrap_or_default();
+    println!(
+        "Saved snapshot #{}{} for '{}' at {}",
+        snap.id,
+        lbl,
+        snap.project_name,
+        format_ts(snap.created_at)
+    );
+    println!(
+        "  Health: {} | Files: {} | Relations: {} | Coverage: {:.1}% ({}) | Crit: {} | High: {}",
+        snap.health,
+        snap.active_objects,
+        snap.relations_count,
+        snap.coverage_ratio,
+        snap.documentation_health,
+        snap.critical_risks,
+        snap.high_risks
+    );
     Ok(())
 }
 
@@ -2206,6 +2283,18 @@ fn handle_session(store: &mut Store, action: SessionCommands, json: bool) -> Res
                         row.difficulty, row.sessions, avg_d, avg_q
                     );
                 }
+                if stats.hard_scored_sessions > 0 {
+                    println!(
+                        "  False Alarms (Hard -> fast & quality >= 4): {} / {}",
+                        stats.false_alarms, stats.hard_scored_sessions
+                    );
+                }
+                if stats.easy_scored_sessions > 0 {
+                    println!(
+                        "  Missed Difficulty (Easy -> slow or quality <= 2): {} / {}",
+                        stats.missed_difficulty, stats.easy_scored_sessions
+                    );
+                }
             }
         }
     }
@@ -2228,10 +2317,7 @@ fn handle_benchmark(store: &Store, action: BenchmarkCommands, json: bool) -> Res
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| config.display().to_string());
-                Some((
-                    store.save_benchmark_run(&suite_name, &report)?,
-                    suite_name,
-                ))
+                Some((store.save_benchmark_run(&suite_name, &report)?, suite_name))
             } else {
                 None
             };
@@ -2248,7 +2334,10 @@ fn handle_benchmark(store: &Store, action: BenchmarkCommands, json: bool) -> Res
                 let t3 = case.top3_hit.map(fmt_hit).unwrap_or("-");
                 let t5 = case.top5_hit.map(fmt_hit).unwrap_or("-");
                 let cp = if case.cross_project_total > 0 {
-                    format!(" | proj: {}/{}", case.cross_project_matched, case.cross_project_total)
+                    format!(
+                        " | proj: {}/{}",
+                        case.cross_project_matched, case.cross_project_total
+                    )
                 } else {
                     String::new()
                 };
@@ -2372,7 +2461,10 @@ fn handle_benchmark(store: &Store, action: BenchmarkCommands, json: bool) -> Res
                         .unwrap_or_default();
                     let noise = pct(run.noise_hits, run.total_returned_hits);
                     let cp = if run.cross_project_total > 0 {
-                        format!("{:.1}%", pct(run.cross_project_matched, run.cross_project_total))
+                        format!(
+                            "{:.1}%",
+                            pct(run.cross_project_matched, run.cross_project_total)
+                        )
                     } else {
                         "-".to_string()
                     };
@@ -2448,7 +2540,11 @@ fn default_db_path() -> PathBuf {
 
 fn format_ts(ts: i64) -> String {
     DateTime::from_timestamp(ts, 0)
-        .map(|dt| dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string())
+        .map(|dt| {
+            dt.with_timezone(&Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        })
         .unwrap_or_else(|| ts.to_string())
 }
 
@@ -2481,11 +2577,6 @@ fn display_relative<'a>(path: &'a str, root: &str) -> &'a str {
         .filter(|rest| !rest.is_empty())
         .unwrap_or(path)
 }
-
-
-
-
-
 
 fn parse_since_arg(raw: &str) -> Result<i64> {
     parse_since_arg_at(raw, now_unix(), Local::now().date_naive())
@@ -2534,13 +2625,7 @@ fn local_midnight_timestamp(date: NaiveDate, label: &str) -> Result<i64> {
     Ok(local_dt.timestamp())
 }
 
-
-fn render_graph_tree(
-    nodes: &[GraphTreeNode],
-    root_prefix: &str,
-    prefix: &str,
-    is_incoming: bool,
-) {
+fn render_graph_tree(nodes: &[GraphTreeNode], root_prefix: &str, prefix: &str, is_incoming: bool) {
     for (idx, node) in nodes.iter().enumerate() {
         let is_last = idx + 1 == nodes.len();
         let branch = if is_last { "└─" } else { "├─" };
@@ -2811,7 +2896,12 @@ fn print_all_index_report(batch: &JsonAllIndexReport) {
 fn collect_all_statuses(
     store: &Store,
     experimental: bool,
-) -> Result<Vec<(vos_core::ProjectStatus, Option<vos_core::RecoveryPrediction>)>> {
+) -> Result<
+    Vec<(
+        vos_core::ProjectStatus,
+        Option<vos_core::RecoveryPrediction>,
+    )>,
+> {
     let projects = store.list_projects()?;
     let mut rows = Vec::with_capacity(projects.len());
     for item in projects {
@@ -2833,7 +2923,12 @@ fn collect_all_statuses(
     Ok(rows)
 }
 
-fn print_all_statuses(rows: &[(vos_core::ProjectStatus, Option<vos_core::RecoveryPrediction>)]) {
+fn print_all_statuses(
+    rows: &[(
+        vos_core::ProjectStatus,
+        Option<vos_core::RecoveryPrediction>,
+    )],
+) {
     if rows.is_empty() {
         println!("No projects registered yet.");
         return;
@@ -2881,8 +2976,8 @@ fn resolve_snapshot_diff(
         };
         Ok(store.compare_snapshot_to_live(&target_project, from_id)?)
     } else {
-        let from = from_id
-            .ok_or_else(|| anyhow::anyhow!("provide <FROM_ID> <TO_ID>, or use --live"))?;
+        let from =
+            from_id.ok_or_else(|| anyhow::anyhow!("provide <FROM_ID> <TO_ID>, or use --live"))?;
         let to = to_id.ok_or_else(|| {
             anyhow::anyhow!("provide <TO_ID> (or pass --live to compare against current state)")
         })?;
@@ -2922,9 +3017,18 @@ mod tests {
         let now = 1_760_000_000_i64;
         let today = NaiveDate::from_ymd_opt(2026, 11, 24).unwrap();
 
-        assert_eq!(parse_since_arg_at("12h", now, today).unwrap(), now - 12 * 3_600);
-        assert_eq!(parse_since_arg_at("7d", now, today).unwrap(), now - 7 * 86_400);
-        assert_eq!(parse_since_arg_at("2W", now, today).unwrap(), now - 14 * 86_400);
+        assert_eq!(
+            parse_since_arg_at("12h", now, today).unwrap(),
+            now - 12 * 3_600
+        );
+        assert_eq!(
+            parse_since_arg_at("7d", now, today).unwrap(),
+            now - 7 * 86_400
+        );
+        assert_eq!(
+            parse_since_arg_at("2W", now, today).unwrap(),
+            now - 14 * 86_400
+        );
         assert_eq!(parse_since_arg_at("0d", now, today).unwrap(), now);
 
         let today_ts = parse_since_arg_at(" today ", now, today).unwrap();

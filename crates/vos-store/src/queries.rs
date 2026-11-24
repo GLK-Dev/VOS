@@ -227,10 +227,14 @@ impl Store {
             })
         })?;
 
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
-    fn find_object_by_id_or_path(&self, id_or_path: &str) -> Result<Option<ObjectRecord>, StoreError> {
+    fn find_object_by_id_or_path(
+        &self,
+        id_or_path: &str,
+    ) -> Result<Option<ObjectRecord>, StoreError> {
         self.conn
             .query_row(
                 "SELECT id, project_id, path, kind, title, summary, content_hash,
@@ -266,8 +270,11 @@ impl Store {
             return Ok(matches.pop());
         }
         if matches.len() > 1 {
-            let exact: Vec<ObjectRecord> =
-                matches.iter().filter(|m| m.title == target).cloned().collect();
+            let exact: Vec<ObjectRecord> = matches
+                .iter()
+                .filter(|m| m.title == target)
+                .cloned()
+                .collect();
             if exact.len() == 1 {
                 return Ok(exact.into_iter().next());
             }
@@ -391,7 +398,9 @@ mod tests {
     #[test]
     fn fts_search_and_soft_delete_stay_consistent() {
         let mut store = Store::open_in_memory().unwrap();
-        let project = store.create_project("ai-os", None, Some("Kernel notes")).unwrap();
+        let project = store
+            .create_project("ai-os", None, Some("Kernel notes"))
+            .unwrap();
 
         let outcome = store
             .upsert_object(UpsertObjectInput {
@@ -522,10 +531,12 @@ mod tests {
         let hits = store.search("event log", Some("demo"), 5).unwrap();
         assert!(!hits.is_empty());
         assert_eq!(hits[0].title, "memory.md");
-        assert!(hits[0]
-            .signals
-            .iter()
-            .any(|s| s.label == "all query terms matched"));
+        assert!(
+            hits[0]
+                .signals
+                .iter()
+                .any(|s| s.label == "all query terms matched")
+        );
     }
 
     #[test]
@@ -626,7 +637,9 @@ mod tests {
         batch.commit().unwrap();
 
         // Even though `README.md` exists in the repo CWD, `--project proj_b` must resolve `proj_b`'s file.
-        let details = store.show_object_scoped("README.md", Some("proj_b")).unwrap();
+        let details = store
+            .show_object_scoped("README.md", Some("proj_b"))
+            .unwrap();
         assert_eq!(details.project_name.as_deref(), Some("proj_b"));
         assert_eq!(details.object.path, "/fake/b/README.md");
     }
@@ -665,7 +678,9 @@ mod tests {
         assert!(msg.contains("/ws/alpha/src/lib.rs"));
         assert!(msg.contains("/ws/beta/src/lib.rs"));
 
-        let scoped = store.show_object_scoped(".\\src\\lib.rs", Some("beta")).unwrap();
+        let scoped = store
+            .show_object_scoped(".\\src\\lib.rs", Some("beta"))
+            .unwrap();
         assert_eq!(scoped.object.path, "/ws/beta/src/lib.rs");
     }
 

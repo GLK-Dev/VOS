@@ -113,7 +113,11 @@ impl Store {
 
             // Compute reciprocal rank across the union of specified file expectations.
             let mut mrr_targets: Vec<String> = Vec::new();
-            for list in [&case.expected_top1, &case.expected_top3, &case.expected_top5] {
+            for list in [
+                &case.expected_top1,
+                &case.expected_top3,
+                &case.expected_top5,
+            ] {
                 for item in list {
                     if !mrr_targets.contains(item) {
                         mrr_targets.push(item.clone());
@@ -150,18 +154,19 @@ impl Store {
                 cross_total += case_cross_total;
             }
 
-            let cat_entry = cat_map
-                .entry(category.clone())
-                .or_insert_with(|| CategoryBenchmarkStats {
-                    category: category.clone(),
-                    cases: 0,
-                    top1_passed: 0,
-                    top1_total: 0,
-                    top3_passed: 0,
-                    top3_total: 0,
-                    top5_passed: 0,
-                    top5_total: 0,
-                });
+            let cat_entry =
+                cat_map
+                    .entry(category.clone())
+                    .or_insert_with(|| CategoryBenchmarkStats {
+                        category: category.clone(),
+                        cases: 0,
+                        top1_passed: 0,
+                        top1_total: 0,
+                        top3_passed: 0,
+                        top3_total: 0,
+                        top5_passed: 0,
+                        top5_total: 0,
+                    });
             cat_entry.cases += 1;
             if let Some(ok) = top1_hit {
                 cat_entry.top1_total += 1;
@@ -280,7 +285,8 @@ impl Store {
             })
         })?;
 
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 }
 
@@ -295,4 +301,3 @@ fn matches_expected(hit: &SearchHit, expected: &[String]) -> bool {
         norm_actual == norm_exp || norm_actual.ends_with(&format!("/{norm_exp}"))
     })
 }
-

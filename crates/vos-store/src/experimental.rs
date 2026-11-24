@@ -1,9 +1,10 @@
-use vos_core::util::now_unix;
-use std::collections::{HashMap, HashSet, VecDeque};
 use rusqlite::params;
+use std::collections::{HashMap, HashSet, VecDeque};
+use vos_core::util::now_unix;
 use vos_core::{
     DocQualityEntry, DocQualityReport, DocQualityTier, DocumentationHealth, GraphDirection,
-    HubImportance, ObjectImpact, ProjectStatus, RecoveryDifficulty, RecoveryPrediction, RelationType,
+    HubImportance, ObjectImpact, ProjectStatus, RecoveryDifficulty, RecoveryPrediction,
+    RelationType,
 };
 
 use crate::{Store, StoreError};
@@ -155,7 +156,11 @@ impl Store {
             let substance_pts = (size_bytes / 150).min(40);
             let md_pts = (md_links * 10).min(30);
             let ref_pts = (path_refs * 5).min(20);
-            let anchor_pts = if is_canonical_doc_title(&title) { 10 } else { 0 };
+            let anchor_pts = if is_canonical_doc_title(&title) {
+                10
+            } else {
+                0
+            };
             let quality_score = (substance_pts + md_pts + ref_pts + anchor_pts).min(100);
 
             let tier = if quality_score >= 70 {
@@ -232,7 +237,10 @@ impl Store {
                 other => StoreError::from(other),
             })?;
 
-        let trimmed_root = root_path.as_deref().unwrap_or("").trim_end_matches(['/', '\\']);
+        let trimmed_root = root_path
+            .as_deref()
+            .unwrap_or("")
+            .trim_end_matches(['/', '\\']);
         let normalize = |p: &str| -> String {
             if !trimmed_root.is_empty() {
                 p.strip_prefix(trimmed_root)
@@ -303,7 +311,8 @@ impl Store {
     }
 }
 
-fn is_canonical_doc_title(title: &str) -> bool {    let lower = title.to_ascii_lowercase();
+fn is_canonical_doc_title(title: &str) -> bool {
+    let lower = title.to_ascii_lowercase();
     matches!(
         lower.as_str(),
         "readme.md"
@@ -399,7 +408,9 @@ pub(crate) fn predict_from_status_at(status: &ProjectStatus, now: i64) -> Recove
 
 #[cfg(test)]
 mod tests {
-    use vos_core::{DocumentationHealth, Project, ProjectHealth, ProjectStatus, RecoveryDifficulty};
+    use vos_core::{
+        DocumentationHealth, Project, ProjectHealth, ProjectStatus, RecoveryDifficulty,
+    };
 
     use super::*;
 
@@ -589,64 +600,97 @@ mod tests {
         let proj = store.create_project("blast", None, None).unwrap();
         let mut batch = store.begin_index_batch().unwrap();
 
-        let mk = |path: &str, title: &str, kind: vos_core::ObjectKind, hash: &str| crate::UpsertObjectInput {
-            project_id: Some(proj.id.clone()),
-            path: path.to_string(),
-            kind,
-            title: title.to_string(),
-            summary: None,
-            content_hash: hash.to_string(),
-            size_bytes: 120,
-            modified_at: 100,
-            is_noise: false,
-            chunks: vec![format!("content {path}")],
+        let mk = |path: &str, title: &str, kind: vos_core::ObjectKind, hash: &str| {
+            crate::UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: path.to_string(),
+                kind,
+                title: title.to_string(),
+                summary: None,
+                content_hash: hash.to_string(),
+                size_bytes: 120,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec![format!("content {path}")],
+            }
         };
 
-        let id_core = batch.upsert_object(mk("src/core.rs", "core.rs", vos_core::ObjectKind::Code, "h1")).unwrap().object_id().to_string();
-        let id_api = batch.upsert_object(mk("src/api.rs", "api.rs", vos_core::ObjectKind::Code, "h2")).unwrap().object_id().to_string();
-        let id_cli = batch.upsert_object(mk("src/cli.rs", "cli.rs", vos_core::ObjectKind::Code, "h3")).unwrap().object_id().to_string();
-        let id_spec = batch.upsert_object(mk("SPEC.md", "SPEC.md", vos_core::ObjectKind::Note, "h4")).unwrap().object_id().to_string();
+        let id_core = batch
+            .upsert_object(mk(
+                "src/core.rs",
+                "core.rs",
+                vos_core::ObjectKind::Code,
+                "h1",
+            ))
+            .unwrap()
+            .object_id()
+            .to_string();
+        let id_api = batch
+            .upsert_object(mk("src/api.rs", "api.rs", vos_core::ObjectKind::Code, "h2"))
+            .unwrap()
+            .object_id()
+            .to_string();
+        let id_cli = batch
+            .upsert_object(mk("src/cli.rs", "cli.rs", vos_core::ObjectKind::Code, "h3"))
+            .unwrap()
+            .object_id()
+            .to_string();
+        let id_spec = batch
+            .upsert_object(mk("SPEC.md", "SPEC.md", vos_core::ObjectKind::Note, "h4"))
+            .unwrap()
+            .object_id()
+            .to_string();
 
-        batch.sync_relations(
-            &[id_core.clone(), id_api.clone(), id_cli.clone(), id_spec.clone()],
-            &[
-                crate::RelationInput {
-                    from_object_id: id_api.clone(),
-                    to_object_id: id_core.clone(),
-                    relation_type: RelationType::RustUse,
-                    confidence: 0.9,
-                    detail: None,
-                },
-                crate::RelationInput {
-                    from_object_id: id_spec.clone(),
-                    to_object_id: id_core.clone(),
-                    relation_type: RelationType::MdLink,
-                    confidence: 0.95,
-                    detail: None,
-                },
-                crate::RelationInput {
-                    from_object_id: id_cli.clone(),
-                    to_object_id: id_api.clone(),
-                    relation_type: RelationType::RustUse,
-                    confidence: 0.9,
-                    detail: None,
-                },
-                crate::RelationInput {
-                    from_object_id: id_api.clone(),
-                    to_object_id: id_cli.clone(),
-                    relation_type: RelationType::PathRef,
-                    confidence: 0.7,
-                    detail: None,
-                },
-            ],
-        ).unwrap();
+        batch
+            .sync_relations(
+                &[
+                    id_core.clone(),
+                    id_api.clone(),
+                    id_cli.clone(),
+                    id_spec.clone(),
+                ],
+                &[
+                    crate::RelationInput {
+                        from_object_id: id_api.clone(),
+                        to_object_id: id_core.clone(),
+                        relation_type: RelationType::RustUse,
+                        confidence: 0.9,
+                        detail: None,
+                    },
+                    crate::RelationInput {
+                        from_object_id: id_spec.clone(),
+                        to_object_id: id_core.clone(),
+                        relation_type: RelationType::MdLink,
+                        confidence: 0.95,
+                        detail: None,
+                    },
+                    crate::RelationInput {
+                        from_object_id: id_cli.clone(),
+                        to_object_id: id_api.clone(),
+                        relation_type: RelationType::RustUse,
+                        confidence: 0.9,
+                        detail: None,
+                    },
+                    crate::RelationInput {
+                        from_object_id: id_api.clone(),
+                        to_object_id: id_cli.clone(),
+                        relation_type: RelationType::PathRef,
+                        confidence: 0.7,
+                        detail: None,
+                    },
+                ],
+            )
+            .unwrap();
         batch.commit().unwrap();
 
         let impact = store.experimental_why_impact(&id_core).unwrap();
         assert_eq!(impact.path, "src/core.rs");
         assert_eq!(impact.direct_dependents, 2);
         assert_eq!(impact.transitive_dependents, 3);
-        assert_eq!(impact.sample_dependents, vec!["SPEC.md", "src/api.rs", "src/cli.rs"]);
+        assert_eq!(
+            impact.sample_dependents,
+            vec!["SPEC.md", "src/api.rs", "src/cli.rs"]
+        );
         assert!(impact.hub_score.is_some());
         assert_eq!(impact.role.as_deref(), Some("Core Provider"));
     }

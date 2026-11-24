@@ -156,9 +156,6 @@ impl Store {
         })
     }
 
-
-
-
     /// Builds an actionable continuation briefing (`resume + activity + why`) for `vos continue`.
     pub fn project_continue(&self, project_name: &str) -> Result<ProjectContinue, StoreError> {
         let start = self.project_start(project_name)?;
@@ -171,7 +168,10 @@ impl Store {
 
         let mut hub_degrees: HashMap<String, usize> = HashMap::new();
         for hub in &graph.hubs {
-            hub_degrees.insert(hub.object.id.clone(), hub.outgoing_count + hub.incoming_count);
+            hub_degrees.insert(
+                hub.object.id.clone(),
+                hub.outgoing_count + hub.incoming_count,
+            );
         }
 
         let mut continue_from = Vec::new();
@@ -253,7 +253,10 @@ impl Store {
         }
 
         let coverage_warnings = coverage.underdocumented.into_iter().take(4).collect();
-        let last_session = self.list_sessions(Some(project_name), 1)?.into_iter().next();
+        let last_session = self
+            .list_sessions(Some(project_name), 1)?
+            .into_iter()
+            .next();
 
         Ok(ProjectContinue {
             resume,
@@ -332,12 +335,8 @@ impl Store {
         let outgoing_relations = self.object_relations(&obj.id, GraphDirection::Outgoing)?;
         let incoming_relations = self.object_relations(&obj.id, GraphDirection::Incoming)?;
 
-        let related = self.related_to_object(
-            &obj,
-            &details.tags,
-            details.project_name.as_deref(),
-            5,
-        )?;
+        let related =
+            self.related_to_object(&obj, &details.tags, details.project_name.as_deref(), 5)?;
 
         let mut ev_stmt = self.conn.prepare(
             "SELECT id, project_id, object_id, event_type, path, detail, created_at
@@ -391,7 +390,12 @@ impl Store {
 
         let capped_limit = limit.clamp(1, 50);
         if let Ok(details) = self.show_object_scoped(trimmed, project_name) {
-            return self.related_to_object(&details.object, &details.tags, project_name, capped_limit);
+            return self.related_to_object(
+                &details.object,
+                &details.tags,
+                project_name,
+                capped_limit,
+            );
         }
 
         self.related_to_topic(trimmed, project_name, capped_limit)
@@ -445,7 +449,17 @@ impl Store {
                 (RelationType::PathRef, true) => (35, "references file (path_ref)".to_string()),
                 (RelationType::PathRef, false) => (35, "referenced by (path_ref)".to_string()),
             };
-            add_signal(&mut candidates, id, pname, title, path, kind, mod_at, score, reason);
+            add_signal(
+                &mut candidates,
+                id,
+                pname,
+                title,
+                path,
+                kind,
+                mod_at,
+                score,
+                reason,
+            );
         }
 
         // 1. Shared tags
@@ -832,18 +846,20 @@ fn add_signal(
     points: i64,
     reason: String,
 ) {
-    let entry = map.entry(object_id.clone()).or_insert_with(|| CandidateAccum {
-        hit: RelatedHit {
-            object_id,
-            project_name,
-            title,
-            path,
-            kind,
-            score: 0,
-            reasons: Vec::new(),
-        },
-        modified_at,
-    });
+    let entry = map
+        .entry(object_id.clone())
+        .or_insert_with(|| CandidateAccum {
+            hit: RelatedHit {
+                object_id,
+                project_name,
+                title,
+                path,
+                kind,
+                score: 0,
+                reasons: Vec::new(),
+            },
+            modified_at,
+        });
     entry.hit.score += points;
     if !entry.hit.reasons.contains(&reason) {
         entry.hit.reasons.push(reason);
@@ -921,7 +937,6 @@ fn extract_title_terms(raw: &str) -> Vec<String> {
     }
     out
 }
-
 
 pub(crate) fn object_area(path: &str, root_prefix: &str) -> String {
     let trimmed_root = root_prefix.trim_end_matches(['/', '\\']);
@@ -1101,13 +1116,25 @@ mod tests {
 
         let resume = store.project_resume("tessera").unwrap();
         assert_eq!(resume.active_objects, 3);
-        assert!(resume.starting_points.iter().any(|o| o.title == "README.md"));
+        assert!(
+            resume
+                .starting_points
+                .iter()
+                .any(|o| o.title == "README.md")
+        );
         assert!(!resume.most_active_areas.is_empty());
 
-        let related = store.find_related("scheduler.rs", Some("tessera"), 5).unwrap();
+        let related = store
+            .find_related("scheduler.rs", Some("tessera"), 5)
+            .unwrap();
         assert_eq!(related[0].title, "fairness.rs");
         assert!(related[0].reasons.iter().any(|r| r.contains("shared tag")));
-        assert!(related[0].reasons.iter().any(|r| r.contains("same directory")));
+        assert!(
+            related[0]
+                .reasons
+                .iter()
+                .any(|r| r.contains("same directory"))
+        );
 
         let by_topic = store.find_related("scheduler", Some("tessera"), 5).unwrap();
         assert_eq!(by_topic[0].title, "scheduler.rs");
@@ -1198,7 +1225,9 @@ mod tests {
             .unwrap();
         batch.commit().unwrap();
 
-        let started = store.start_session("contproj", Some("check recovery")).unwrap();
+        let started = store
+            .start_session("contproj", Some("check recovery"))
+            .unwrap();
         assert!(started.ended_at.is_none());
         let cont_active = store.project_continue("contproj").unwrap();
         let active_sess = cont_active.last_session.expect("active session present");
@@ -1212,7 +1241,10 @@ mod tests {
         let done_sess = cont_done.last_session.expect("completed session present");
         assert!(done_sess.ended_at.is_some());
         assert_eq!(done_sess.recovery_quality, Some(5));
-        assert_eq!(done_sess.stop_note.as_deref(), Some("Next: wire continue tests"));
+        assert_eq!(
+            done_sess.stop_note.as_deref(),
+            Some("Next: wire continue tests")
+        );
     }
 
     #[test]
@@ -1245,7 +1277,10 @@ mod tests {
         let cont = store.project_continue("aligned").unwrap();
         let status = store.project_status("aligned").unwrap();
 
-        assert_eq!(start.open_questions, vec!["ROADMAP.md: OPEN QUESTION: keep WAL?"]);
+        assert_eq!(
+            start.open_questions,
+            vec!["ROADMAP.md: OPEN QUESTION: keep WAL?"]
+        );
         assert_eq!(cont.open_questions, start.open_questions);
         assert_eq!(status.open_questions, start.open_questions);
     }

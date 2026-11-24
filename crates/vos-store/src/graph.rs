@@ -51,7 +51,8 @@ impl Store {
                 project_id: row.get(4)?,
             })
         })?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     /// Returns direct outgoing and/or incoming deterministic edges for an active object.
@@ -98,7 +99,8 @@ impl Store {
             })
         })?;
 
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     /// Builds a deterministic dependency graph for a project (or focused on `target`).
@@ -126,10 +128,8 @@ impl Store {
             .query_map(params![project.id], map_object_row)?
             .collect::<Result<Vec<_>, _>>()?;
 
-        let objects_by_id: HashMap<String, ObjectRecord> = object_rows
-            .into_iter()
-            .map(|o| (o.id.clone(), o))
-            .collect();
+        let objects_by_id: HashMap<String, ObjectRecord> =
+            object_rows.into_iter().map(|o| (o.id.clone(), o)).collect();
 
         let mut edge_stmt = self.conn.prepare(
             "SELECT r.from_id, r.to_id, r.relation_type, r.confidence, r.detail
@@ -260,12 +260,16 @@ fn sort_edges(
                 let pa = if use_to_path {
                     objects_by_id.get(&a.to_id).map_or("", |o| o.path.as_str())
                 } else {
-                    objects_by_id.get(&a.from_id).map_or("", |o| o.path.as_str())
+                    objects_by_id
+                        .get(&a.from_id)
+                        .map_or("", |o| o.path.as_str())
                 };
                 let pb = if use_to_path {
                     objects_by_id.get(&b.to_id).map_or("", |o| o.path.as_str())
                 } else {
-                    objects_by_id.get(&b.from_id).map_or("", |o| o.path.as_str())
+                    objects_by_id
+                        .get(&b.from_id)
+                        .map_or("", |o| o.path.as_str())
                 };
                 pa.cmp(pb)
             })
@@ -393,7 +397,12 @@ mod tests {
     use super::*;
     use crate::{RelationInput, UpsertObjectInput};
 
-    fn dummy_input(project_id: &str, path: &str, kind: ObjectKind, title: &str) -> UpsertObjectInput {
+    fn dummy_input(
+        project_id: &str,
+        path: &str,
+        kind: ObjectKind,
+        title: &str,
+    ) -> UpsertObjectInput {
         UpsertObjectInput {
             project_id: Some(project_id.to_string()),
             path: path.to_string(),
@@ -415,17 +424,32 @@ mod tests {
 
         let mut batch = store.begin_index_batch().unwrap();
         let id_mod = batch
-            .upsert_object(dummy_input(&proj.id, "/demo/src/transformer/mod.rs", ObjectKind::Code, "mod.rs"))
+            .upsert_object(dummy_input(
+                &proj.id,
+                "/demo/src/transformer/mod.rs",
+                ObjectKind::Code,
+                "mod.rs",
+            ))
             .unwrap()
             .object_id()
             .to_string();
         let id_kv = batch
-            .upsert_object(dummy_input(&proj.id, "/demo/src/transformer/kv_cache.rs", ObjectKind::Code, "kv_cache.rs"))
+            .upsert_object(dummy_input(
+                &proj.id,
+                "/demo/src/transformer/kv_cache.rs",
+                ObjectKind::Code,
+                "kv_cache.rs",
+            ))
             .unwrap()
             .object_id()
             .to_string();
         let id_layer = batch
-            .upsert_object(dummy_input(&proj.id, "/demo/src/transformer/layer.rs", ObjectKind::Code, "layer.rs"))
+            .upsert_object(dummy_input(
+                &proj.id,
+                "/demo/src/transformer/layer.rs",
+                ObjectKind::Code,
+                "layer.rs",
+            ))
             .unwrap()
             .object_id()
             .to_string();
@@ -470,21 +494,34 @@ mod tests {
         batch.commit().unwrap();
 
         let graph = store
-            .project_graph("demo", Some("transformer/mod.rs"), GraphDirection::Both, 4, 5)
+            .project_graph(
+                "demo",
+                Some("transformer/mod.rs"),
+                GraphDirection::Both,
+                4,
+                5,
+            )
             .unwrap();
         assert_eq!(graph.total_relations, 4);
         assert_eq!(graph.connected_objects, 3);
         assert_eq!(graph.hubs[0].outgoing_count, 2);
         assert_eq!(graph.hubs[0].incoming_count, 1);
 
-        let why = store.why_object("transformer/mod.rs", Some("demo")).unwrap();
+        let why = store
+            .why_object("transformer/mod.rs", Some("demo"))
+            .unwrap();
         assert_eq!(why.outgoing_relations.len(), 2);
         assert_eq!(why.incoming_relations.len(), 1);
 
         let related = store
             .find_related("transformer/mod.rs", Some("demo"), 5)
             .unwrap();
-        assert!(related.iter().any(|r| r.title == "kv_cache.rs" && r.reasons.iter().any(|s| s.contains("rust_mod"))));
+        assert!(
+            related
+                .iter()
+                .any(|r| r.title == "kv_cache.rs"
+                    && r.reasons.iter().any(|s| s.contains("rust_mod")))
+        );
 
         // Re-syncing with same data remains idempotent; deleting kv_cache removes stale edges.
         let mut del_batch = store.begin_index_batch().unwrap();
@@ -510,21 +547,92 @@ mod tests {
         let mut store = Store::open_in_memory().unwrap();
         let proj = store.create_project("diamond", None, None).unwrap();
         let mut batch = store.begin_index_batch().unwrap();
-        let id_root = batch.upsert_object(dummy_input(&proj.id, "/d/root.rs", ObjectKind::Code, "root.rs")).unwrap().object_id().to_string();
-        let id_b = batch.upsert_object(dummy_input(&proj.id, "/d/b.rs", ObjectKind::Code, "b.rs")).unwrap().object_id().to_string();
-        let id_c = batch.upsert_object(dummy_input(&proj.id, "/d/c.rs", ObjectKind::Code, "c.rs")).unwrap().object_id().to_string();
-        let id_shared = batch.upsert_object(dummy_input(&proj.id, "/d/shared.rs", ObjectKind::Code, "shared.rs")).unwrap().object_id().to_string();
-        let id_leaf = batch.upsert_object(dummy_input(&proj.id, "/d/leaf.rs", ObjectKind::Code, "leaf.rs")).unwrap().object_id().to_string();
+        let id_root = batch
+            .upsert_object(dummy_input(
+                &proj.id,
+                "/d/root.rs",
+                ObjectKind::Code,
+                "root.rs",
+            ))
+            .unwrap()
+            .object_id()
+            .to_string();
+        let id_b = batch
+            .upsert_object(dummy_input(&proj.id, "/d/b.rs", ObjectKind::Code, "b.rs"))
+            .unwrap()
+            .object_id()
+            .to_string();
+        let id_c = batch
+            .upsert_object(dummy_input(&proj.id, "/d/c.rs", ObjectKind::Code, "c.rs"))
+            .unwrap()
+            .object_id()
+            .to_string();
+        let id_shared = batch
+            .upsert_object(dummy_input(
+                &proj.id,
+                "/d/shared.rs",
+                ObjectKind::Code,
+                "shared.rs",
+            ))
+            .unwrap()
+            .object_id()
+            .to_string();
+        let id_leaf = batch
+            .upsert_object(dummy_input(
+                &proj.id,
+                "/d/leaf.rs",
+                ObjectKind::Code,
+                "leaf.rs",
+            ))
+            .unwrap()
+            .object_id()
+            .to_string();
 
         batch
             .sync_relations(
-                &[id_root.clone(), id_b.clone(), id_c.clone(), id_shared.clone(), id_leaf.clone()],
                 &[
-                    RelationInput { from_object_id: id_root.clone(), to_object_id: id_b.clone(), relation_type: RelationType::RustUse, confidence: 0.9, detail: None },
-                    RelationInput { from_object_id: id_root, to_object_id: id_c.clone(), relation_type: RelationType::RustUse, confidence: 0.9, detail: None },
-                    RelationInput { from_object_id: id_b, to_object_id: id_shared.clone(), relation_type: RelationType::RustUse, confidence: 0.9, detail: None },
-                    RelationInput { from_object_id: id_c, to_object_id: id_shared.clone(), relation_type: RelationType::RustUse, confidence: 0.9, detail: None },
-                    RelationInput { from_object_id: id_shared, to_object_id: id_leaf, relation_type: RelationType::RustUse, confidence: 0.9, detail: None },
+                    id_root.clone(),
+                    id_b.clone(),
+                    id_c.clone(),
+                    id_shared.clone(),
+                    id_leaf.clone(),
+                ],
+                &[
+                    RelationInput {
+                        from_object_id: id_root.clone(),
+                        to_object_id: id_b.clone(),
+                        relation_type: RelationType::RustUse,
+                        confidence: 0.9,
+                        detail: None,
+                    },
+                    RelationInput {
+                        from_object_id: id_root,
+                        to_object_id: id_c.clone(),
+                        relation_type: RelationType::RustUse,
+                        confidence: 0.9,
+                        detail: None,
+                    },
+                    RelationInput {
+                        from_object_id: id_b,
+                        to_object_id: id_shared.clone(),
+                        relation_type: RelationType::RustUse,
+                        confidence: 0.9,
+                        detail: None,
+                    },
+                    RelationInput {
+                        from_object_id: id_c,
+                        to_object_id: id_shared.clone(),
+                        relation_type: RelationType::RustUse,
+                        confidence: 0.9,
+                        detail: None,
+                    },
+                    RelationInput {
+                        from_object_id: id_shared,
+                        to_object_id: id_leaf,
+                        relation_type: RelationType::RustUse,
+                        confidence: 0.9,
+                        detail: None,
+                    },
                 ],
             )
             .unwrap();

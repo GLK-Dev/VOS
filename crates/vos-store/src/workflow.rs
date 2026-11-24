@@ -170,7 +170,8 @@ impl Store {
              LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![project_name, capped], map_snapshot_row)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     /// Compares two persisted snapshots and computes deltas and resolved/new work items.
@@ -294,10 +295,7 @@ impl Store {
             )
             .optional()?
             .ok_or_else(|| {
-                StoreError::NotFound(
-                    "active session",
-                    project_name.unwrap_or("any").to_string(),
-                )
+                StoreError::NotFound("active session", project_name.unwrap_or("any").to_string())
             })?;
 
         let current = self.get_session(&session_id)?;
@@ -321,9 +319,10 @@ impl Store {
                  OR (e.event_type NOT IN ('added', 'modified') AND e.created_at >= ?2)
                )",
         )?;
-        let ev_rows = ev_stmt.query_map(params![current.project_id, current.started_at], |row| {
-            row.get::<_, String>(0)
-        })?;
+        let ev_rows = ev_stmt
+            .query_map(params![current.project_id, current.started_at], |row| {
+                row.get::<_, String>(0)
+            })?;
         for row in ev_rows {
             changed_paths.insert(row?);
         }
@@ -335,9 +334,10 @@ impl Store {
                AND is_noise = 0
                AND modified_at >= ?2",
         )?;
-        let obj_rows = obj_stmt.query_map(params![current.project_id, current.started_at], |row| {
-            row.get::<_, String>(0)
-        })?;
+        let obj_rows = obj_stmt
+            .query_map(params![current.project_id, current.started_at], |row| {
+                row.get::<_, String>(0)
+            })?;
         for row in obj_rows {
             changed_paths.insert(row?);
         }
@@ -420,7 +420,8 @@ impl Store {
              LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![project_name, capped], map_session_row)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     /// Aggregates session statistics, return points, productive areas, and Predicted-vs-Actual metrics.
@@ -500,6 +501,28 @@ impl Store {
             });
         }
 
+        let mut false_alarms = 0;
+        let mut hard_scored_sessions = 0;
+        let mut missed_difficulty = 0;
+        let mut easy_scored_sessions = 0;
+        for s in sessions.iter().filter(|s| s.ended_at.is_some()) {
+            match s.predicted_difficulty {
+                RecoveryDifficulty::Hard
+                    if s.duration_secs.is_some() && s.recovery_quality.is_some() =>
+                {
+                    hard_scored_sessions += 1;
+                    false_alarms += usize::from(is_false_alarm(s));
+                }
+                RecoveryDifficulty::Easy
+                    if s.duration_secs.is_some() || s.recovery_quality.is_some() =>
+                {
+                    easy_scored_sessions += 1;
+                    missed_difficulty += usize::from(is_missed_difficulty(s));
+                }
+                _ => {}
+            }
+        }
+
         Ok(SessionStats {
             project_name: project_name.map(str::to_string),
             total_sessions,
@@ -511,8 +534,22 @@ impl Store {
             frequent_return_points,
             most_productive_areas,
             by_predicted_difficulty,
+            false_alarms,
+            hard_scored_sessions,
+            missed_difficulty,
+            easy_scored_sessions,
         })
     }
+}
+
+/// Thresholds mirror `scripts/analyze_recovery.ps1`: Hard -> quality >= 4 within 5 minutes.
+fn is_false_alarm(s: &WorkSession) -> bool {
+    s.recovery_quality.is_some_and(|q| q >= 4) && s.duration_secs.is_some_and(|d| d <= 5 * 60)
+}
+
+/// Thresholds mirror `scripts/analyze_recovery.ps1`: Easy -> quality <= 2 or >= 15 minutes.
+fn is_missed_difficulty(s: &WorkSession) -> bool {
+    s.recovery_quality.is_some_and(|q| q <= 2) || s.duration_secs.is_some_and(|d| d >= 15 * 60)
 }
 
 fn map_snapshot_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectSnapshot> {
@@ -781,15 +818,21 @@ mod tests {
         for _ in 0..8 {
             let s1 = store.start_session("tiny", Some("easy check")).unwrap();
             assert_eq!(s1.predicted_difficulty, RecoveryDifficulty::Easy);
-            store.stop_session(Some("tiny"), Some(5), Some("fast")).unwrap();
+            store
+                .stop_session(Some("tiny"), Some(5), Some("fast"))
+                .unwrap();
 
             let s2 = store.start_session("mid", Some("med check")).unwrap();
             assert_eq!(s2.predicted_difficulty, RecoveryDifficulty::Medium);
-            store.stop_session(Some("mid"), Some(4), Some("ok")).unwrap();
+            store
+                .stop_session(Some("mid"), Some(4), Some("ok"))
+                .unwrap();
 
             let s3 = store.start_session("complex", Some("hard check")).unwrap();
             assert_eq!(s3.predicted_difficulty, RecoveryDifficulty::Hard);
-            store.stop_session(Some("complex"), Some(2), Some("heavy")).unwrap();
+            store
+                .stop_session(Some("complex"), Some(2), Some("heavy"))
+                .unwrap();
         }
 
         let stats = store.session_stats(None).unwrap();
@@ -797,12 +840,21 @@ mod tests {
         assert_eq!(stats.completed_sessions, 24);
         assert_eq!(stats.active_sessions, 0);
         assert_eq!(stats.by_predicted_difficulty.len(), 3);
-        assert_eq!(stats.by_predicted_difficulty[0].difficulty, RecoveryDifficulty::Easy);
+        assert_eq!(
+            stats.by_predicted_difficulty[0].difficulty,
+            RecoveryDifficulty::Easy
+        );
         assert_eq!(stats.by_predicted_difficulty[0].sessions, 8);
         assert_eq!(stats.by_predicted_difficulty[0].avg_quality, Some(5.0));
-        assert_eq!(stats.by_predicted_difficulty[1].difficulty, RecoveryDifficulty::Medium);
+        assert_eq!(
+            stats.by_predicted_difficulty[1].difficulty,
+            RecoveryDifficulty::Medium
+        );
         assert_eq!(stats.by_predicted_difficulty[1].avg_quality, Some(4.0));
-        assert_eq!(stats.by_predicted_difficulty[2].difficulty, RecoveryDifficulty::Hard);
+        assert_eq!(
+            stats.by_predicted_difficulty[2].difficulty,
+            RecoveryDifficulty::Hard
+        );
         assert_eq!(stats.by_predicted_difficulty[2].avg_quality, Some(2.0));
         assert!(!stats.frequent_return_points.is_empty());
     }
@@ -872,5 +924,31 @@ mod tests {
         assert_eq!(snaps[0].label.as_deref(), Some("portfolio-check"));
         assert_eq!(snaps[1].label.as_deref(), Some("portfolio-check"));
         assert_eq!(store.list_snapshots(None, 10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn classifies_false_alarm_and_missed_difficulty() {
+        let mk = |diff, dur, qual| WorkSession {
+            id: "s".into(),
+            project_id: "p".into(),
+            project_name: "p".into(),
+            started_at: 0,
+            ended_at: Some(dur),
+            duration_secs: Some(dur),
+            predicted_difficulty: diff,
+            predicted_score: 0,
+            recovery_quality: Some(qual),
+            return_point: None,
+            start_note: None,
+            stop_note: None,
+            files_changed_count: 0,
+            productive_areas: vec![],
+        };
+        assert!(is_false_alarm(&mk(RecoveryDifficulty::Hard, 300, 4)));
+        assert!(!is_false_alarm(&mk(RecoveryDifficulty::Hard, 301, 4)));
+        assert!(!is_false_alarm(&mk(RecoveryDifficulty::Hard, 60, 3)));
+        assert!(is_missed_difficulty(&mk(RecoveryDifficulty::Easy, 900, 5)));
+        assert!(is_missed_difficulty(&mk(RecoveryDifficulty::Easy, 60, 2)));
+        assert!(!is_missed_difficulty(&mk(RecoveryDifficulty::Easy, 899, 3)));
     }
 }
