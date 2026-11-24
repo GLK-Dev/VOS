@@ -147,6 +147,17 @@ if ($predRows.Count -gt 0) {
     $missedDiff = @($easyBucket | Where-Object { $_.Quality -le 2 -or $_.TimeMin -ge 15.0 }).Count
 }
 
+# Prefer the counters computed by the CLI (single source of truth for thresholds);
+# fall back to the markdown-derived values when the SQLite stats are unavailable or older.
+$statsSource = 'markdown'
+if ($dbSessionStats -and $null -ne $dbSessionStats.false_alarms -and $null -ne $dbSessionStats.missed_difficulty) {
+    $falseAlarms = [int]$dbSessionStats.false_alarms
+    $hardTotal = [int]$dbSessionStats.hard_scored_sessions
+    $missedDiff = [int]$dbSessionStats.missed_difficulty
+    $easyTotal = [int]$dbSessionStats.easy_scored_sessions
+    $statsSource = 'sqlite'
+}
+
 $helpfulCounts = @{}
 $ignoredCounts = @{}
 foreach ($r in $rows) {
@@ -172,6 +183,7 @@ if ($Json) {
         }
         predicted_actual = [pscustomobject]@{
             by_tier           = $tierSummaries
+            stats_source      = $statsSource
             false_alarms      = $falseAlarms
             hard_total        = $hardTotal
             missed_difficulty = $missedDiff
@@ -219,6 +231,7 @@ if ($predRows.Count -gt 0) {
     }
     $faPct = if ($hardTotal -gt 0) { " ($([math]::Round(($falseAlarms / $hardTotal) * 100, 1))% of Hard)" } else { "" }
     $mdPct = if ($easyTotal -gt 0) { " ($([math]::Round(($missedDiff / $easyTotal) * 100, 1))% of Easy)" } else { "" }
+    Write-Host ("  Source: {0}" -f $statsSource)
     Write-Host ("  False Alarms (Hard -> <=5m & Q>=4):   {0}{1}" -f $falseAlarms, $faPct)
     Write-Host ("  Missed Difficulty (Easy -> >=15m/Q<=2): {0}{1}" -f $missedDiff, $mdPct)
 }

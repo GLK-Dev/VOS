@@ -69,6 +69,7 @@ vos compare-snapshot 1 2
 vos compare-snapshot --project my-app --live
 vos session start my-app --note "Resume task"
 vos session stop my-app --quality 5 --note "Next step"
+vos session stop my-app --quality 4 --log docs/recovery_benchmark.md --first-command continue --helpful "Critical Risk"
 vos session stats my-app
 vos status my-app --experimental
 vos status --all --experimental --json

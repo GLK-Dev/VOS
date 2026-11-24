@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Local, NaiveDate, TimeZone};
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
@@ -352,6 +352,26 @@ impl From<CliGraphDirection> for GraphDirection {
     }
 }
 
+/// Options for appending a Recovery League Log row when stopping a session.
+#[derive(Debug, clap::Args)]
+struct SessionLogArgs {
+    /// Append a Recovery League Log row to this markdown file (requires --quality).
+    #[arg(long = "log", requires = "quality")]
+    log: Option<PathBuf>,
+    /// First command used during recovery (for --log).
+    #[arg(long, default_value = "-")]
+    first_command: String,
+    /// Days the project was paused (for --log).
+    #[arg(long, default_value = "-")]
+    days_away: String,
+    /// Helpful signals, comma-separated (for --log).
+    #[arg(long, default_value = "-")]
+    helpful: String,
+    /// Ignored or noisy signals, comma-separated (for --log).
+    #[arg(long, default_value = "-")]
+    ignored: String,
+}
+
 #[derive(Debug, Subcommand)]
 enum SessionCommands {
     /// Start tracking a recovery/work session for a project (refreshes index by default).
@@ -378,6 +398,8 @@ enum SessionCommands {
         /// Skip automatic re-indexing before closing the session.
         #[arg(long)]
         no_index: bool,
+        #[command(flatten)]
+        log_opts: Box<SessionLogArgs>,
     },
     /// List recorded work sessions.
     List {
@@ -455,6 +477,18 @@ enum ProjectCommands {
 }
 
 fn main() -> Result<()> {
+    // The derived clap command tree is large; debug builds exceed the default 1 MiB
+    // Windows main-thread stack, so run the CLI on a thread with an explicit stack size.
+    std::thread::Builder::new()
+        .name("vos-main".into())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(run)
+        .context("failed to spawn the CLI thread")?
+        .join()
+        .map_err(|_| anyhow::anyhow!("CLI thread panicked"))?
+}
+
+fn run() -> Result<()> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
@@ -2168,6 +2202,7 @@ fn handle_session(store: &mut Store, action: SessionCommands, json: bool) -> Res
             quality,
             note,
             no_index,
+            log_opts,
         } => {
             if !no_index {
                 let target_project = match project.as_deref() {
@@ -2183,6 +2218,19 @@ fn handle_session(store: &mut Store, action: SessionCommands, json: bool) -> Res
                 }
             }
             let s = store.stop_session(project.as_deref(), quality, note.as_deref())?;
+            if let Some(log_path) = log_opts.log.as_deref() {
+                let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+                let row = vos_store::format_recovery_log_row(
+                    &s,
+                    &date,
+                    &log_opts.days_away,
+                    &log_opts.first_command,
+                    &log_opts.helpful,
+                    &log_opts.ignored,
+                )?;
+                append_log_row(log_path, &row)?;
+                eprintln!("Logged: {row}");
+            }
             if json {
                 return print_json(&s);
             }
@@ -2298,6 +2346,24 @@ fn handle_session(store: &mut Store, action: SessionCommands, json: bool) -> Res
             }
         }
     }
+    Ok(())
+}
+
+/// Appends one markdown table row, starting a new line if the file lacks a trailing newline.
+fn append_log_row(path: &std::path::Path, row: &str) -> Result<()> {
+    use std::io::Write;
+    let needs_newline = std::fs::read(path)
+        .map(|b| !b.is_empty() && !b.ends_with(b"\n"))
+        .unwrap_or(false);
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("failed to open log file {}", path.display()))?;
+    if needs_newline {
+        writeln!(f)?;
+    }
+    writeln!(f, "{row}")?;
     Ok(())
 }
 

@@ -27,6 +27,7 @@ pub use batch::{IndexBatch, RelationInput, UpsertObjectInput, UpsertOutcome};
 pub use benchmark::load_benchmark_cases;
 pub use graph::ActiveObjectRef;
 pub use search::SearchFilters;
+pub use workflow::format_recovery_log_row;
 
 const MIGRATIONS: &[(&str, &str)] = &[
     (

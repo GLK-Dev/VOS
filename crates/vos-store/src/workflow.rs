@@ -542,6 +542,48 @@ impl Store {
     }
 }
 
+/// Formats a completed session as a `docs/recovery_benchmark.md` Recovery League Log row.
+///
+/// Requires a finished session with a recorded quality score; pipes are replaced so the
+/// markdown table stays aligned.
+pub fn format_recovery_log_row(
+    session: &WorkSession,
+    date: &str,
+    days_away: &str,
+    first_command: &str,
+    helpful: &str,
+    ignored: &str,
+) -> Result<String, StoreError> {
+    let (Some(duration), Some(quality)) = (session.duration_secs, session.recovery_quality) else {
+        return Err(StoreError::InvalidInput(
+            "recovery log row requires a stopped session with --quality".to_string(),
+        ));
+    };
+    let clean = |v: &str| {
+        let v = v.replace(['|', '\n', '\r'], "/");
+        let v = v.trim();
+        if v.is_empty() {
+            "-".to_string()
+        } else {
+            v.to_string()
+        }
+    };
+    let minutes = ((duration as f64 / 60.0 * 10.0).round() / 10.0).max(0.1);
+    Ok(format!(
+        "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+        clean(date),
+        clean(&session.project_name),
+        clean(days_away),
+        clean(first_command).to_lowercase(),
+        session.predicted_difficulty,
+        minutes,
+        quality,
+        clean(helpful),
+        clean(ignored),
+        clean(session.stop_note.as_deref().unwrap_or("")),
+    ))
+}
+
 /// Thresholds mirror `scripts/analyze_recovery.ps1`: Hard -> quality >= 4 within 5 minutes.
 fn is_false_alarm(s: &WorkSession) -> bool {
     s.recovery_quality.is_some_and(|q| q >= 4) && s.duration_secs.is_some_and(|d| d <= 5 * 60)
@@ -924,6 +966,34 @@ mod tests {
         assert_eq!(snaps[0].label.as_deref(), Some("portfolio-check"));
         assert_eq!(snaps[1].label.as_deref(), Some("portfolio-check"));
         assert_eq!(store.list_snapshots(None, 10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn formats_recovery_log_row_and_rejects_unscored_sessions() {
+        let mut s = WorkSession {
+            id: "s".into(),
+            project_id: "p".into(),
+            project_name: "demo".into(),
+            started_at: 0,
+            ended_at: Some(372),
+            duration_secs: Some(372),
+            predicted_difficulty: RecoveryDifficulty::Hard,
+            predicted_score: 0,
+            recovery_quality: Some(4),
+            return_point: None,
+            start_note: None,
+            stop_note: Some("a|b".into()),
+            files_changed_count: 0,
+            productive_areas: vec![],
+        };
+        let row =
+            format_recovery_log_row(&s, "2026-11-24", "", "Continue", "Critical Risk", "").unwrap();
+        assert_eq!(
+            row,
+            "| 2026-11-24 | demo | - | continue | Hard | 6.2 | 4 | Critical Risk | - | a/b |"
+        );
+        s.recovery_quality = None;
+        assert!(format_recovery_log_row(&s, "d", "", "", "", "").is_err());
     }
 
     #[test]
