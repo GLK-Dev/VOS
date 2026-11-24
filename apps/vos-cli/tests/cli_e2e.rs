@@ -459,3 +459,50 @@ fn cli_snapshot_compare_and_session_tracking_work_end_to_end() {
     assert!(stats_out.contains("total=1 completed=1 active=0"));
     assert!(stats_out.contains("Mean Recovery Quality: 5.00 / 5.0"));
 }
+
+#[test]
+fn cli_json_output_and_why_experimental_blast_radius_work_end_to_end() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("jsonproj");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("README.md"), "# JsonProj\nSee [api](src/api.rs).\n").unwrap();
+    fs::write(proj.join("benchmark_output.txt"), "Run 1\nPass\n").unwrap();
+    fs::write(proj.join("src/core.rs"), "pub fn core_fn() {}\n").unwrap();
+    fs::write(proj.join("src/api.rs"), "use crate::core;\npub fn call() {}\n").unwrap();
+    fs::write(proj.join("src/cli.rs"), "use crate::api;\n").unwrap();
+
+    let proj_json = assert_vos_ok(&db, &["project", "create", "jsonproj", proj.to_str().unwrap(), "--json"]);
+    let proj_val: serde_json::Value = serde_json::from_str(&proj_json).expect("project json");
+    assert_eq!(proj_val["name"], "jsonproj");
+
+    let idx_json = assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "jsonproj", "--json"]);
+    let idx_val: serde_json::Value = serde_json::from_str(&idx_json).expect("index json");
+    assert_eq!(idx_val["added"], 5);
+
+    // Log/benchmark output files must not be classified as markdown/note docs in DocQualityReport.
+    let cov_json = assert_vos_ok(&db, &["coverage", "jsonproj", "--experimental", "--json"]);
+    let cov_val: serde_json::Value = serde_json::from_str(&cov_json).expect("coverage json");
+    assert_eq!(cov_val["doc_quality"]["total_docs"], 1);
+
+    // Baseline `vos why` omits experimental blast radius; `--experimental` enables it.
+    let why_base = assert_vos_ok(&db, &["why", "core.rs", "--project", "jsonproj"]);
+    assert!(!why_base.contains("Experimental Blast Radius:"));
+
+    let why_exp = assert_vos_ok(&db, &["why", "core.rs", "--project", "jsonproj", "--experimental"]);
+    assert!(why_exp.contains("Experimental Blast Radius:"));
+    assert!(why_exp.contains("Dependents: 1 direct / 3 transitive"));
+
+    let why_json = assert_vos_ok(&db, &["why", "core.rs", "--project", "jsonproj", "--experimental", "--json"]);
+    let why_val: serde_json::Value = serde_json::from_str(&why_json).expect("why json");
+    assert_eq!(why_val["experimental_impact"]["direct_dependents"], 1);
+    assert_eq!(why_val["experimental_impact"]["transitive_dependents"], 3);
+
+    let status_json = assert_vos_ok(&db, &["status", "jsonproj", "--experimental", "--json"]);
+    let st_val: serde_json::Value = serde_json::from_str(&status_json).expect("status json");
+    assert!(st_val["recovery_prediction"]["difficulty"].is_string());
+
+    let sess_json = assert_vos_ok(&db, &["session", "start", "jsonproj", "--json"]);
+    let s_val: serde_json::Value = serde_json::from_str(&sess_json).expect("session json");
+    assert_eq!(s_val["project_name"], "jsonproj");
+}

@@ -66,12 +66,23 @@ fn normalize_for_prefix(path: &str) -> String {
 
 /// Classifies a file by extension into a VOS `ObjectKind`.
 pub fn classify_path(path: &Path) -> ObjectKind {
-    if path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|n| n == ".env" || n.starts_with(".env."))
-    {
-        return ObjectKind::Config;
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        let lower = name.to_ascii_lowercase();
+        if lower == ".env"
+            || lower.starts_with(".env.")
+            || matches!(
+                lower.as_str(),
+                "cmakelists.txt" | "requirements.txt" | "constraints.txt" | "robots.txt"
+            )
+        {
+            return ObjectKind::Config;
+        }
+        if lower.ends_with("_output.txt")
+            || lower.ends_with("_results.txt")
+            || lower.ends_with("_log.txt")
+        {
+            return ObjectKind::Other;
+        }
     }
 
     let ext = path
@@ -88,7 +99,8 @@ pub fn classify_path(path: &Path) -> ObjectKind {
         Some("json" | "yaml" | "yml" | "toml" | "ini" | "env" | "conf" | "properties") => {
             ObjectKind::Config
         }
-        Some("md" | "markdown" | "txt" | "rst" | "org" | "adoc" | "log") => ObjectKind::Note,
+        Some("md" | "markdown" | "txt" | "rst" | "org" | "adoc") => ObjectKind::Note,
+        Some("log") => ObjectKind::Other,
         Some("pdf" | "docx" | "doc" | "odt" | "epub" | "pptx" | "xlsx" | "csv") => ObjectKind::Doc,
         Some("gguf" | "safetensors" | "onnx" | "ggml" | "pt" | "pth") => ObjectKind::Model,
         Some("png" | "jpg" | "jpeg" | "webp" | "gif" | "svg" | "mp3" | "wav" | "flac" | "mp4" | "mkv") => {
@@ -217,6 +229,9 @@ mod tests {
         assert_eq!(classify_path(Path::new("qwen3.gguf")), ObjectKind::Model);
         assert_eq!(classify_path(Path::new("diagram.png")), ObjectKind::Media);
         assert_eq!(classify_path(Path::new("archive.tar.gz")), ObjectKind::Other);
+        assert_eq!(classify_path(Path::new("build.log")), ObjectKind::Other);
+        assert_eq!(classify_path(Path::new("benchmark_output.txt")), ObjectKind::Other);
+        assert_eq!(classify_path(Path::new("requirements.txt")), ObjectKind::Config);
     }
 
     #[test]

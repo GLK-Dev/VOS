@@ -27,6 +27,10 @@ struct Cli {
     #[arg(long, env = "VOS_EXPERIMENTAL", global = true, value_parser = clap::builder::BoolishValueParser::new())]
     experimental: bool,
 
+    /// Emit machine-readable JSON instead of human-readable text.
+    #[arg(long, global = true)]
+    json: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -341,6 +345,7 @@ fn main() -> Result<()> {
     let mut store = Store::open(&db_path)?;
 
     let experimental = cli.experimental;
+    let json = cli.json;
     match cli.command {
         Commands::Project { action } => match action {
             ProjectCommands::Create {
@@ -349,6 +354,9 @@ fn main() -> Result<()> {
                 description,
             } => {
                 let project = store.create_project(&name, Some(&path), description.as_deref())?;
+                if json {
+                    return print_json(&project);
+                }
                 println!("Created project '{}' ({})", project.name, project.id);
                 if let Some(root) = project.root_path {
                     println!("Root: {root}");
@@ -356,6 +364,9 @@ fn main() -> Result<()> {
             }
             ProjectCommands::List => {
                 let projects = store.list_projects()?;
+                if json {
+                    return print_json(&projects);
+                }
                 if projects.is_empty() {
                     println!("No projects yet. Create one with `vos project create <name> <path>`.");
                 } else {
@@ -390,6 +401,19 @@ fn main() -> Result<()> {
                 project.as_deref(),
                 IndexOptions { no_ignore },
             )?;
+            if json {
+                return print_json(&JsonIndexReport {
+                    scanned: report.scanned,
+                    added: report.added,
+                    modified: report.modified,
+                    restored: report.restored,
+                    unchanged: report.unchanged,
+                    deleted: report.deleted,
+                    skipped: report.skipped,
+                    relations: report.relations,
+                    elapsed_ms: report.elapsed.as_millis(),
+                });
+            }
             println!("Scanned:   {}", report.scanned);
             println!(
                 "Updated:   {} (added: {}, modified: {}, restored: {})",
@@ -414,6 +438,9 @@ fn main() -> Result<()> {
             include_internal,
         } => {
             let hits = store.search_with_options(&query, project.as_deref(), limit, include_internal)?;
+            if json {
+                return print_json(&hits);
+            }
             if hits.is_empty() {
                 println!("No matches found for \"{query}\".");
             } else {
@@ -454,6 +481,9 @@ fn main() -> Result<()> {
         }
         Commands::Show { target } => {
             let details = store.show_object(&target)?;
+            if json {
+                return print_json(&details);
+            }
             let obj = &details.object;
             println!("Object: {} ({})", obj.title, obj.id);
             println!("Path:   {}", obj.path);
@@ -485,6 +515,9 @@ fn main() -> Result<()> {
         }
         Commands::Tag { target, tags } => {
             let obj = store.add_tags(&target, &tags)?;
+            if json {
+                return print_json(&obj);
+            }
             println!("Tagged '{}' ({}) with: {}", obj.title, obj.id, tags.join(", "));
         }
         Commands::Context {
@@ -493,6 +526,9 @@ fn main() -> Result<()> {
             include_noise,
         } => {
             let ctx = store.project_context(&project, limit, include_noise)?;
+            if json {
+                return print_json(&ctx);
+            }
             let root_prefix = ctx.project.root_path.as_deref().unwrap_or("");
             println!("Project: {} ({})", ctx.project.name, ctx.project.id);
             if let Some(ref desc) = ctx.project.description {
@@ -574,6 +610,9 @@ fn main() -> Result<()> {
                 .and_then(|p| p.root_path.as_deref())
                 .unwrap_or("");
             let events = store.project_timeline(&project, limit)?;
+            if json {
+                return print_json(&events);
+            }
 
             if events.is_empty() {
                 println!("No events recorded for project '{project}'.");
@@ -621,6 +660,9 @@ fn main() -> Result<()> {
             include_noise,
         } => {
             let activity = store.project_activity(&project, days, include_noise)?;
+            if json {
+                return print_json(&activity);
+            }
             let root_prefix = activity.project.root_path.as_deref().unwrap_or("");
             println!(
                 "Project: {} | Last {} day(s) (since {})",
@@ -659,6 +701,9 @@ fn main() -> Result<()> {
         Commands::Evolution { project, since } => {
             let since_ts = parse_since_arg(&since)?;
             let evo = store.project_evolution(&project, since_ts, &since)?;
+            if json {
+                return print_json(&evo);
+            }
             println!(
                 "Evolution: {} (since {} / {})",
                 evo.project.name,
@@ -703,6 +748,9 @@ fn main() -> Result<()> {
         }
         Commands::Drift { project } => {
             let drift = store.project_drift(&project)?;
+            if json {
+                return print_json(&drift);
+            }
             println!("Drift report: {}", drift.project.name);
             if drift.findings.is_empty() {
                 println!("  No documentation or roadmap drift detected.");
@@ -716,6 +764,17 @@ fn main() -> Result<()> {
             }
         }        Commands::Status { project } => {
             let st = store.project_status(&project)?;
+            let prediction = if experimental {
+                Some(store.predict_recovery_difficulty(&st))
+            } else {
+                None
+            };
+            if json {
+                return print_json(&JsonStatusWithExperimental {
+                    status: &st,
+                    recovery_prediction: prediction,
+                });
+            }
             let root_prefix = st.project.root_path.as_deref().unwrap_or("");
             println!("Project: {} ({} active, {} deleted)", st.project.name, st.active_objects, st.deleted_objects);
             println!("\nHealth: {}", st.health);
@@ -794,8 +853,7 @@ fn main() -> Result<()> {
                 }
             }
 
-            if experimental {
-                let pred = store.predict_recovery_difficulty(&st);
+            if let Some(pred) = prediction {
                 println!("\nExperimental Insights:");
                 println!("  Recovery Difficulty: {} (score: {})", pred.difficulty, pred.score);
                 println!("  Factors:");
@@ -806,6 +864,9 @@ fn main() -> Result<()> {
         }
         Commands::Explain { concept, project } => {
             let exp = store.explain_concept(&concept, project.as_deref())?;
+            if json {
+                return print_json(&exp);
+            }
             println!("Concept: {}", exp.concept);
 
             println!("\nFiles contributing:");
@@ -846,6 +907,9 @@ fn main() -> Result<()> {
         Commands::ChangedSince { since, project } => {
             let since_ts = parse_since_arg(&since)?;
             let report = store.changed_since(since_ts, &since, project.as_deref())?;
+            if json {
+                return print_json(&report);
+            }
             let root_prefix = report.project_root.as_deref().unwrap_or("");
             let scope = report.project_name.as_deref().unwrap_or("all projects");
 
@@ -897,6 +961,9 @@ fn main() -> Result<()> {
             }
         }        Commands::Continue { project } => {
             let cont = store.project_continue(&project)?;
+            if json {
+                return print_json(&cont);
+            }
             let res = &cont.resume;
             let root_prefix = res.project.root_path.as_deref().unwrap_or("");
             println!("Project: {} ({} active objects)", res.project.name, res.active_objects);
@@ -987,6 +1054,9 @@ fn main() -> Result<()> {
             }
         }        Commands::Start { project } => {
             let start = store.project_start(&project)?;
+            if json {
+                return print_json(&start);
+            }
             let res = &start.resume;
             let root_prefix = res.project.root_path.as_deref().unwrap_or("");
             println!("Project: {} ({} active objects)", res.project.name, res.active_objects);
@@ -1044,6 +1114,9 @@ fn main() -> Result<()> {
             }
         }        Commands::Resume { project } => {
             let res = store.project_resume(&project)?;
+            if json {
+                return print_json(&res);
+            }
             let root_prefix = res.project.root_path.as_deref().unwrap_or("");
             println!("Project: {} ({} active objects)", res.project.name, res.active_objects);
 
@@ -1105,6 +1178,9 @@ fn main() -> Result<()> {
             limit,
         } => {
             let hits = store.find_related(&target, project.as_deref(), limit)?;
+            if json {
+                return print_json(&hits);
+            }
             if hits.is_empty() {
                 println!("No related objects found for \"{target}\".");
             } else {
@@ -1125,6 +1201,17 @@ fn main() -> Result<()> {
         }
         Commands::Why { target, project } => {
             let why = store.why_object(&target, project.as_deref())?;
+            let impact = if experimental {
+                Some(store.experimental_why_impact(&why.object.id)?)
+            } else {
+                None
+            };
+            if json {
+                return print_json(&JsonWhyWithExperimental {
+                    why: &why,
+                    experimental_impact: impact,
+                });
+            }
             let root_prefix = why.project_root.as_deref().unwrap_or("");
             let rel_path = display_relative(&why.object.path, root_prefix);
 
@@ -1199,6 +1286,22 @@ fn main() -> Result<()> {
                     );
                 }
             }
+            if let Some(imp) = impact {
+                println!("\nExperimental Blast Radius:");
+                if let (Some(score), Some(role)) = (imp.hub_score, imp.role.as_deref()) {
+                    println!("  Hub Score: {:.2} ({role})", score);
+                }
+                println!(
+                    "  Dependents: {} direct / {} transitive",
+                    imp.direct_dependents, imp.transitive_dependents
+                );
+                if !imp.sample_dependents.is_empty() {
+                    println!("  Affected objects:");
+                    for dep in &imp.sample_dependents {
+                        println!("    - {dep}");
+                    }
+                }
+            }
         }
         Commands::Graph {
             project,
@@ -1214,6 +1317,17 @@ fn main() -> Result<()> {
                 depth,
                 limit,
             )?;
+            let hub_importance = if experimental {
+                Some(store.experimental_hub_importance(&project, limit)?)
+            } else {
+                None
+            };
+            if json {
+                return print_json(&JsonGraphWithExperimental {
+                    graph: &graph,
+                    hub_importance,
+                });
+            }
             let root_prefix = graph.project.root_path.as_deref().unwrap_or("");
 
             if let Some(ref target_obj) = graph.target {
@@ -1264,22 +1378,21 @@ fn main() -> Result<()> {
                 }
             }
 
-            if experimental {
-                let hubs = store.experimental_hub_importance(&project, limit)?;
-                if !hubs.is_empty() {
-                    println!("\nExperimental Hub Importance:");
-                    for (idx, h) in hubs.iter().enumerate() {
-                        println!(
-                            "  {:>2}. {} | Hub Score: {:.2} | {} rels (out: {}, in: {}) | {}",
-                            idx + 1,
-                            h.path,
-                            h.hub_score,
-                            h.total_relations,
-                            h.out_degree,
-                            h.in_degree,
-                            h.role
-                        );
-                    }
+            if let Some(hubs) = hub_importance
+                && !hubs.is_empty()
+            {
+                println!("\nExperimental Hub Importance:");
+                for (idx, h) in hubs.iter().enumerate() {
+                    println!(
+                        "  {:>2}. {} | Hub Score: {:.2} | {} rels (out: {}, in: {}) | {}",
+                        idx + 1,
+                        h.path,
+                        h.hub_score,
+                        h.total_relations,
+                        h.out_degree,
+                        h.in_degree,
+                        h.role
+                    );
                 }
             }
         }
@@ -1289,6 +1402,9 @@ fn main() -> Result<()> {
             limit,
         } => {
             let own = store.project_ownership(&project, days, limit)?;
+            if json {
+                return print_json(&own);
+            }
             println!(
                 "Ownership: {} (areas: {}, window: {}d)",
                 own.project.name, own.total_areas, own.days
@@ -1341,6 +1457,17 @@ fn main() -> Result<()> {
         }
         Commands::Coverage { project } => {
             let cov = store.project_coverage(&project)?;
+            let doc_quality = if experimental {
+                Some(store.experimental_doc_quality(&project)?)
+            } else {
+                None
+            };
+            if json {
+                return print_json(&JsonCoverageWithExperimental {
+                    coverage: &cov,
+                    doc_quality,
+                });
+            }
             println!("Coverage: {}", cov.project.name);
             println!("\nCode Files: {}", cov.code_files);
             println!("Docs Files: {}", cov.doc_files);
@@ -1387,8 +1514,7 @@ fn main() -> Result<()> {
                 }
             }
 
-            if experimental {
-                let dq = store.experimental_doc_quality(&project)?;
+            if let Some(dq) = doc_quality {
                 println!("\nExperimental Documentation Quality:");
                 println!(
                     "  Docs Analyzed: {} | Mean Quality Score: {:.1} / 100",
@@ -1411,6 +1537,9 @@ fn main() -> Result<()> {
         }
         Commands::Snapshot { project, label } => {
             let snap = store.save_snapshot(&project, label.as_deref())?;
+            if json {
+                return print_json(&snap);
+            }
             let lbl = snap
                 .label
                 .as_deref()
@@ -1436,6 +1565,9 @@ fn main() -> Result<()> {
         }
         Commands::Snapshots { project, limit } => {
             let snaps = store.list_snapshots(project.as_deref(), limit)?;
+            if json {
+                return print_json(&snaps);
+            }
             if snaps.is_empty() {
                 println!("No snapshots saved yet.");
             } else {
@@ -1463,6 +1595,9 @@ fn main() -> Result<()> {
         }
         Commands::CompareSnapshot { from_id, to_id } => {
             let diff = store.compare_snapshots(from_id, to_id)?;
+            if json {
+                return print_json(&diff);
+            }
             println!(
                 "Snapshot Diff: #{} ({}, {}) -> #{} ({}, {})",
                 diff.from.id,
@@ -1521,6 +1656,9 @@ fn main() -> Result<()> {
         Commands::Session { action } => match action {
             SessionCommands::Start { project, note } => {
                 let s = store.start_session(&project, note.as_deref())?;
+                if json {
+                    return print_json(&s);
+                }
                 println!(
                     "Started session {} for '{}' at {}",
                     s.id,
@@ -1541,6 +1679,9 @@ fn main() -> Result<()> {
                 note,
             } => {
                 let s = store.stop_session(project.as_deref(), quality, note.as_deref())?;
+                if json {
+                    return print_json(&s);
+                }
                 let dur = s.duration_secs.unwrap_or(0);
                 println!(
                     "Stopped session {} for '{}' (duration: {}s)",
@@ -1561,6 +1702,9 @@ fn main() -> Result<()> {
             }
             SessionCommands::List { project, limit } => {
                 let sessions = store.list_sessions(project.as_deref(), limit)?;
+                if json {
+                    return print_json(&sessions);
+                }
                 if sessions.is_empty() {
                     println!("No work sessions recorded.");
                 } else {
@@ -1589,6 +1733,9 @@ fn main() -> Result<()> {
             }
             SessionCommands::Stats { project } => {
                 let stats = store.session_stats(project.as_deref())?;
+                if json {
+                    return print_json(&stats);
+                }
                 let scope = stats.project_name.as_deref().unwrap_or("all projects");
                 println!(
                     "Session Stats ({}): total={} completed={} active={}",
@@ -1639,6 +1786,24 @@ fn main() -> Result<()> {
             BenchmarkCommands::Search { config, save } => {
                 let cases = load_benchmark_cases(&config)?;
                 let report = store.run_search_benchmark(&cases)?;
+                let saved_run_id = if save {
+                    let suite_name = config
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| config.display().to_string());
+                    Some((
+                        store.save_benchmark_run(&suite_name, &report)?,
+                        suite_name,
+                    ))
+                } else {
+                    None
+                };
+                if json {
+                    return print_json(&JsonBenchmarkSaveResult {
+                        report: &report,
+                        saved_run_id: saved_run_id.as_ref().map(|(id, _)| *id),
+                    });
+                }
 
                 for case in &report.cases {
                     let t1 = case.top1_hit.map(fmt_hit).unwrap_or("-");
@@ -1723,17 +1888,15 @@ fn main() -> Result<()> {
                     }
                 }
 
-                if save {
-                    let suite_name = config
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| config.display().to_string());
-                    let run_id = store.save_benchmark_run(&suite_name, &report)?;
+                if let Some((run_id, suite_name)) = saved_run_id {
                     println!("\nSaved benchmark run #{run_id} ({suite_name}).");
                 }
             }
             BenchmarkCommands::History { limit } => {
                 let runs = store.list_benchmark_runs(limit)?;
+                if json {
+                    return print_json(&runs);
+                }
                 if runs.is_empty() {
                     println!("No benchmark runs saved yet. Run `vos benchmark search --save`.");
                 } else {
@@ -1902,4 +2065,62 @@ fn render_graph_tree(
             render_graph_tree(&node.children, root_prefix, &child_prefix, is_incoming);
         }
     }
+}
+
+fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+struct JsonIndexReport {
+    scanned: usize,
+    added: usize,
+    modified: usize,
+    restored: usize,
+    unchanged: usize,
+    deleted: usize,
+    skipped: usize,
+    relations: usize,
+    elapsed_ms: u128,
+}
+
+#[derive(serde::Serialize)]
+struct JsonStatusWithExperimental<'a> {
+    #[serde(flatten)]
+    status: &'a vos_core::ProjectStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_prediction: Option<vos_core::RecoveryPrediction>,
+}
+
+#[derive(serde::Serialize)]
+struct JsonGraphWithExperimental<'a> {
+    #[serde(flatten)]
+    graph: &'a vos_core::ProjectGraph,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hub_importance: Option<Vec<vos_core::HubImportance>>,
+}
+
+#[derive(serde::Serialize)]
+struct JsonCoverageWithExperimental<'a> {
+    #[serde(flatten)]
+    coverage: &'a vos_core::ProjectCoverage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    doc_quality: Option<vos_core::DocQualityReport>,
+}
+
+#[derive(serde::Serialize)]
+struct JsonWhyWithExperimental<'a> {
+    #[serde(flatten)]
+    why: &'a vos_core::ObjectWhy,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    experimental_impact: Option<vos_core::ObjectImpact>,
+}
+
+#[derive(serde::Serialize)]
+struct JsonBenchmarkSaveResult<'a> {
+    #[serde(flatten)]
+    report: &'a vos_core::SearchBenchmarkReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    saved_run_id: Option<i64>,
 }

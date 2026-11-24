@@ -1,8 +1,8 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Classification of an indexed filesystem object.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ObjectKind {
     Code,
     Note,
@@ -66,7 +66,7 @@ impl fmt::Display for ObjectKind {
 }
 
 /// Lifecycle event recorded for project timeline recovery.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum EventType {
     Added,
     Modified,
@@ -107,7 +107,7 @@ impl fmt::Display for EventType {
 }
 
 /// Top-level project grouping objects and timeline events.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Project {
     pub id: String,
     pub name: String,
@@ -118,7 +118,7 @@ pub struct Project {
 }
 
 /// Aggregated overview returned by `vos project list`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProjectSummary {
     pub project: Project,
     pub active_objects: usize,
@@ -127,7 +127,7 @@ pub struct ProjectSummary {
 }
 
 /// Persisted file or artifact tracked by VOS.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ObjectRecord {
     pub id: String,
     pub project_id: Option<String>,
@@ -145,7 +145,7 @@ pub struct ObjectRecord {
 }
 
 /// Detailed view of a single object including tags and project metadata.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ObjectDetails {
     pub object: ObjectRecord,
     pub project_name: Option<String>,
@@ -154,7 +154,7 @@ pub struct ObjectDetails {
 }
 
 /// Individual scoring contribution returned for `vos search --explain`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SearchSignal {
     pub label: String,
     pub delta: f64,
@@ -163,13 +163,13 @@ pub struct SearchSignal {
 /// Ranked full-text search hit across `chunks_fts` and `objects_fts`.
 /// Detected query intent used to weight title, phrase, and architectural document boosts.
 /// Controls default ranking visibility for search infrastructure/config artifacts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum SearchVisibility {
     Normal,
     Internal,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum QueryIntent {
     Code,
     Documentation,
@@ -191,7 +191,7 @@ impl fmt::Display for QueryIntent {
         f.write_str(self.as_str())
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SearchHit {
     pub object_id: String,
     pub project_name: Option<String>,
@@ -206,7 +206,7 @@ pub struct SearchHit {
 }
 
 /// Timeline event entry for a project.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct EventRecord {
     pub id: i64,
     pub project_id: Option<String>,
@@ -218,7 +218,7 @@ pub struct EventRecord {
 }
 
 /// Snapshot returned by `vos context <project>`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProjectContext {
     pub project: Project,
     pub active_objects: usize,
@@ -231,7 +231,7 @@ pub struct ProjectContext {
 }
 
 /// Time-windowed project activity report for `vos activity <project>`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProjectActivity {
     pub project: Project,
     pub days: u32,
@@ -240,7 +240,7 @@ pub struct ProjectActivity {
 }
 
 /// Aggregated subdirectory activity summary for `vos resume`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ActiveArea {
     pub area: String,
     pub object_count: usize,
@@ -248,7 +248,7 @@ pub struct ActiveArea {
 }
 
 /// Structured context-recovery briefing for `vos resume <project>`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProjectResume {
     pub project: Project,
     pub last_activity_at: Option<i64>,
@@ -260,7 +260,7 @@ pub struct ProjectResume {
 }
 
 /// Deterministic relatedness hit returned by `vos related`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RelatedHit {
     pub object_id: String,
     pub project_name: Option<String>,
@@ -272,7 +272,7 @@ pub struct RelatedHit {
 }
 
 /// Explainable context report returned by `vos why <target>`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ObjectWhy {
     pub object: ObjectRecord,
     pub project_name: Option<String>,
@@ -288,14 +288,14 @@ pub struct ObjectWhy {
 }
 
 /// Actionable entry point with a short rationale for `vos continue`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ContinueSuggestion {
     pub object: ObjectRecord,
     pub reason: String,
 }
 
 /// Combined resume + activity + explainable kickoff briefing for `vos continue <project>`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProjectContinue {
     pub resume: ProjectResume,
     pub continue_from: Vec<ContinueSuggestion>,
@@ -307,7 +307,7 @@ pub struct ProjectContinue {
 }
 /// Combined daily-launch briefing returned by os start <project>.
 /// Combined daily-launch briefing returned by `vos start <project>`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProjectStart {
     pub resume: ProjectResume,
     pub recent_events: Vec<EventRecord>,
@@ -315,7 +315,7 @@ pub struct ProjectStart {
 }
 
 /// Single search benchmark case loaded from YAML.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SearchBenchmarkCase {
     pub query: String,
     #[serde(default)]
@@ -333,7 +333,7 @@ pub struct SearchBenchmarkCase {
 }
 
 /// Outcome of evaluating a single benchmark query.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SearchBenchmarkCaseResult {
     pub query: String,
     pub category: String,
@@ -350,7 +350,7 @@ pub struct SearchBenchmarkCaseResult {
 }
 
 /// Per-category summary inside a benchmark report.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CategoryBenchmarkStats {
     pub category: String,
     pub cases: usize,
@@ -363,7 +363,7 @@ pub struct CategoryBenchmarkStats {
 }
 
 /// Aggregate accuracy, MRR, noise rate, and cross-project recall for a search benchmark suite.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SearchBenchmarkReport {
     pub total_cases: usize,
     pub top1_passed: usize,
@@ -382,7 +382,7 @@ pub struct SearchBenchmarkReport {
 }
 
 /// Persisted benchmark summary row stored in `benchmark_runs`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BenchmarkRunRecord {
     pub id: i64,
     pub suite_name: String,
@@ -408,7 +408,7 @@ pub struct BenchmarkRunRecord {
 
 
 /// Deterministic project health classification for `vos status <project>`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ProjectHealth {
     Active,
     Warm,
@@ -443,7 +443,7 @@ impl fmt::Display for ProjectHealth {
 }
 
 /// Decision-support health and signal summary returned by `vos status <project>`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProjectStatus {
     pub project: Project,
     pub health: ProjectHealth,
@@ -464,7 +464,7 @@ pub struct ProjectStatus {
 }
 
 /// Deterministic concept explanation assembled from project docs, code, and `config/concepts.yaml`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ConceptExplanation {
     pub concept: String,
     pub files_contributing: Vec<SearchHit>,
@@ -474,7 +474,7 @@ pub struct ConceptExplanation {
 }
 
 /// Project memory diff since a date returned by `vos changed-since`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ChangedSinceReport {
     pub project_name: Option<String>,
     pub project_root: Option<String>,
@@ -486,7 +486,7 @@ pub struct ChangedSinceReport {
 }
 
 /// Deterministic project evolution summary returned by `vos evolution <project>`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProjectEvolution {
     pub project: Project,
     pub since_label: String,
@@ -503,7 +503,7 @@ pub struct ProjectEvolution {
 }
 
 /// Single deterministic drift finding returned by `vos drift <project>`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DriftFinding {
     pub kind: String,
     pub summary: String,
@@ -511,7 +511,7 @@ pub struct DriftFinding {
 }
 
 /// Project drift report comparing code activity, documentation freshness, and roadmap tasks.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProjectDrift {
     pub project: Project,
     pub findings: Vec<DriftFinding>,
@@ -519,7 +519,7 @@ pub struct ProjectDrift {
 
 
 /// Deterministic dependency edge type stored in `relations`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum RelationType {
     RustMod,
     RustUse,
@@ -566,7 +566,7 @@ impl fmt::Display for RelationType {
 }
 
 /// Traversal direction for `vos graph`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum GraphDirection {
     Outgoing,
     Incoming,
@@ -590,7 +590,7 @@ impl fmt::Display for GraphDirection {
 }
 
 /// Directed deterministic dependency edge between two indexed objects.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct GraphEdge {
     pub from_object_id: String,
     pub to_object_id: String,
@@ -604,7 +604,7 @@ pub struct GraphEdge {
 }
 
 /// Recursive node in a dependency tree rendered by `vos graph`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct GraphTreeNode {
     pub object: ObjectRecord,
     pub relation_type: RelationType,
@@ -615,7 +615,7 @@ pub struct GraphTreeNode {
 }
 
 /// Root or hub entry inside a `ProjectGraph` report.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct GraphHub {
     pub object: ObjectRecord,
     pub outgoing_count: usize,
@@ -625,7 +625,7 @@ pub struct GraphHub {
 }
 
 /// Deterministic project dependency graph returned by `vos graph`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProjectGraph {
     pub project: Project,
     pub total_relations: usize,
@@ -636,7 +636,7 @@ pub struct ProjectGraph {
     pub hubs: Vec<GraphHub>,
 }
 /// Activity ownership metrics for a single project directory/area (`vos ownership`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AreaOwnership {
     pub area: String,
     pub file_count: usize,
@@ -647,7 +647,7 @@ pub struct AreaOwnership {
 }
 
 /// Aggregated activity ownership summary returned by `vos ownership <project>`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProjectOwnership {
     pub project: Project,
     pub days: u32,
@@ -659,7 +659,7 @@ pub struct ProjectOwnership {
 }
 
 /// Documentation coverage tier assigned to a project area (`vos coverage`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum CoverageTier {
     WellCovered,
     PartiallyCovered,
@@ -683,7 +683,7 @@ impl fmt::Display for CoverageTier {
 }
 
 /// Documentation coverage metrics for a single project area (`vos coverage`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AreaCoverage {
     pub area: String,
     pub code_files: usize,
@@ -695,7 +695,7 @@ pub struct AreaCoverage {
 }
 
 /// Relation-aware documentation coverage summary returned by `vos coverage <project>`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProjectCoverage {
     pub project: Project,
     pub code_files: usize,
@@ -706,7 +706,7 @@ pub struct ProjectCoverage {
     pub underdocumented: Vec<AreaCoverage>,
 }
 /// Overall documentation health tier reported by `vos status <project>`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum DocumentationHealth {
     Good,
     Partial,
@@ -741,7 +741,7 @@ impl fmt::Display for DocumentationHealth {
 }
 
 /// Risk tier for deterministic structural drift and status risk analysis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum RiskLevel {
     Low,
     Medium,
@@ -761,7 +761,7 @@ impl RiskLevel {
 }
 
 /// Combined Graph + Ownership + Coverage + TODO structural risk assessment for a project area.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AreaRisk {
     pub area: String,
     pub level: RiskLevel,
@@ -782,7 +782,7 @@ impl fmt::Display for RiskLevel {
     }
 }
 /// Experimental predicted effort required to resume work in a project.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum RecoveryDifficulty {
     Easy,
     Medium,
@@ -814,14 +814,14 @@ impl fmt::Display for RecoveryDifficulty {
 }
 
 /// Explainable deterministic prediction returned under `--experimental`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RecoveryPrediction {
     pub difficulty: RecoveryDifficulty,
     pub score: usize,
     pub factors: Vec<String>,
 }
 /// Persisted point-in-time snapshot of project status and risks (`vos snapshot`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProjectSnapshot {
     pub id: i64,
     pub project_id: String,
@@ -844,7 +844,7 @@ pub struct ProjectSnapshot {
 }
 
 /// Deterministic comparison between two saved snapshots (`vos compare-snapshot`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SnapshotDiff {
     pub from: ProjectSnapshot,
     pub to: ProjectSnapshot,
@@ -862,7 +862,7 @@ pub struct SnapshotDiff {
 }
 
 /// Persisted developer work/recovery session (`vos session start|stop`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct WorkSession {
     pub id: String,
     pub project_id: String,
@@ -881,7 +881,7 @@ pub struct WorkSession {
 }
 
 /// Breakdown of recorded sessions by predicted difficulty tier.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DifficultyStats {
     pub difficulty: RecoveryDifficulty,
     pub sessions: usize,
@@ -890,7 +890,7 @@ pub struct DifficultyStats {
 }
 
 /// Aggregated recovery and productivity analytics (`vos session stats`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SessionStats {
     pub project_name: Option<String>,
     pub total_sessions: usize,
@@ -905,7 +905,7 @@ pub struct SessionStats {
 }
 
 /// Experimental structural centrality metrics for a node in the dependency graph.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct HubImportance {
     pub path: String,
     pub title: String,
@@ -917,7 +917,7 @@ pub struct HubImportance {
 }
 
 /// Experimental documentation substance tier (`Rich`, `Solid`, `Stub`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum DocQualityTier {
     Rich,
     Solid,
@@ -941,7 +941,7 @@ impl fmt::Display for DocQualityTier {
 }
 
 /// Experimental per-document deterministic quality score (`0..=100`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DocQualityEntry {
     pub path: String,
     pub title: String,
@@ -953,7 +953,7 @@ pub struct DocQualityEntry {
 }
 
 /// Experimental project documentation quality report (`vos coverage --experimental`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DocQualityReport {
     pub project_name: String,
     pub total_docs: usize,
@@ -962,4 +962,15 @@ pub struct DocQualityReport {
     pub solid_count: usize,
     pub stub_count: usize,
     pub docs: Vec<DocQualityEntry>,
+}
+
+/// Experimental blast-radius summary for a target object (os why --experimental).
+#[derive(Debug, Clone, Serialize)]
+pub struct ObjectImpact {
+    pub path: String,
+    pub hub_score: Option<f64>,
+    pub role: Option<String>,
+    pub direct_dependents: usize,
+    pub transitive_dependents: usize,
+    pub sample_dependents: Vec<String>,
 }

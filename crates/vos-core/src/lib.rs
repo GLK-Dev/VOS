@@ -10,7 +10,7 @@ pub use models::{
     ChangedSinceReport, ConceptExplanation, ContinueSuggestion, CoverageTier, DifficultyStats,
     DocQualityEntry, DocQualityReport, DocQualityTier, DocumentationHealth, DriftFinding,
     EventRecord, EventType, GraphDirection, GraphEdge, GraphHub, GraphTreeNode, HubImportance,
-    ObjectDetails, ObjectKind, ObjectRecord, ObjectWhy, Project, ProjectActivity, ProjectContinue,
+    ObjectDetails, ObjectImpact, ObjectKind, ObjectRecord, ObjectWhy, Project, ProjectActivity, ProjectContinue,
     ProjectContext, ProjectCoverage, ProjectDrift, ProjectEvolution, ProjectGraph, ProjectHealth,
     ProjectOwnership, ProjectResume, ProjectSnapshot, ProjectStart, ProjectStatus, ProjectSummary,
     QueryIntent, RecoveryDifficulty, RecoveryPrediction, RelatedHit, RelationType, RiskLevel,

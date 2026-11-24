@@ -38,7 +38,7 @@ try {
         @{ Id = 12; Proj = "tortor";      Task = "Check structural drift";         Cmd = @("drift", "tortor");                                    Expect = @("[structural risk drift]", "src/core") },
         @{ Id = 13; Proj = "auraclean";   Task = "Inspect architecture links";     Cmd = @("graph", "auraclean", "--target", "ARCHITECTURE.md");  Expect = @("lock_detector.rs [path_ref]") },
         @{ Id = 14; Proj = "auraclean";   Task = "Check warm status";              Cmd = @("status", "auraclean");                                Expect = @("Health: Warm", "Coverage: 12.5%") },
-        @{ Id = 15; Proj = "velyx";       Task = "Check doc coverage";             Cmd = @("status", "velyx");                                    Expect = @("Documentation Health: Good", "Coverage: 133.3%") },
+        @{ Id = 15; Proj = "velyx";       Task = "Check doc coverage";             Cmd = @("status", "velyx");                                    Expect = @("Documentation Health: Good", "Coverage: 122.2%") },
         @{ Id = 16; Proj = "velyx";       Task = "Trace whitepaper links";         Cmd = @("graph", "velyx", "--target", "README.md");            Expect = @("WHITEPAPER.md [md_link]") },
         @{ Id = 17; Proj = "cyberframe";  Task = "Trace layout widgets";           Cmd = @("graph", "cyberframe", "--target", "crates/cyber_core/src/lib.rs"); Expect = @("layout.rs [rust_mod]", "widgets.rs [rust_mod]") },
         @{ Id = 18; Proj = "cyberframe";  Task = "Search renderer symbol";         Cmd = @("search", "renderer", "--project", "cyberframe");      Expect = @("cyberframe") },

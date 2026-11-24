@@ -33,7 +33,7 @@ $readScenarios = @(
     @{ Id = 18; Project = "auraclean";   Task = "Arch md/path graph";          Args = @("graph", "auraclean", "--target", "ARCHITECTURE.md"); Expect = @("lock_detector.rs [path_ref]") },
     @{ Id = 19; Project = "auraclean";   Task = "Config-safe drift";           Args = @("drift", "auraclean");                               Expect = @("Drift report: auraclean") },
     @{ Id = 20; Project = "auraclean";   Task = "Coverage ratio & areas";      Args = @("coverage", "auraclean");                            Expect = @("Coverage:   12.5%", "Partially Covered") },
-    @{ Id = 21; Project = "velyx";       Task = "Doc-heavy Good health";       Args = @("status", "velyx");                                  Expect = @("Documentation Health: Good", "Coverage: 133.3%") },
+    @{ Id = 21; Project = "velyx";       Task = "Doc-heavy Good health";       Args = @("status", "velyx");                                  Expect = @("Documentation Health: Good", "Coverage: 122.2%") },
     @{ Id = 22; Project = "velyx";       Task = "Whitepaper link graph";       Args = @("graph", "velyx", "--target", "README.md");          Expect = @("WHITEPAPER.md [md_link]") },
     @{ Id = 23; Project = "cyberframe";  Task = "Crate lib.rs mod graph";      Args = @("graph", "cyberframe", "--target", "crates/cyber_core/src/lib.rs"); Expect = @("layout.rs [rust_mod]", "measure.rs [rust_mod]") },
     @{ Id = 24; Project = "cyberframe";  Task = "Renderer search";             Args = @("search", "renderer", "--project", "cyberframe");    Expect = @("cyberframe") },

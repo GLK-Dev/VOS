@@ -1,9 +1,9 @@
 use vos_core::util::now_unix;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use rusqlite::params;
 use vos_core::{
     DocQualityEntry, DocQualityReport, DocQualityTier, DocumentationHealth, GraphDirection,
-    HubImportance, ProjectStatus, RecoveryDifficulty, RecoveryPrediction, RelationType,
+    HubImportance, ObjectImpact, ProjectStatus, RecoveryDifficulty, RecoveryPrediction, RelationType,
 };
 
 use crate::{Store, StoreError};
@@ -213,10 +213,97 @@ impl Store {
             docs,
         })
     }
+    /// Computes deterministic reverse-dependency blast radius for an object (`vos why --experimental`).
+    pub fn experimental_why_impact(&self, object_id: &str) -> Result<ObjectImpact, StoreError> {
+        let (obj_path, project_name, root_path): (String, Option<String>, Option<String>) = self
+            .conn
+            .query_row(
+                "SELECT o.path, p.name, p.root_path
+                 FROM objects o
+                 LEFT JOIN projects p ON p.id = o.project_id
+                 WHERE o.id = ?1 AND o.is_deleted = 0",
+                params![object_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|err| match err {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    StoreError::NotFound("object", object_id.to_string())
+                }
+                other => StoreError::from(other),
+            })?;
+
+        let trimmed_root = root_path.as_deref().unwrap_or("").trim_end_matches(['/', '\\']);
+        let normalize = |p: &str| -> String {
+            if !trimmed_root.is_empty() {
+                p.strip_prefix(trimmed_root)
+                    .map(|r| r.trim_start_matches(['/', '\\']).to_string())
+                    .unwrap_or_else(|| p.to_string())
+            } else {
+                p.to_string()
+            }
+        };
+        let rel_path = normalize(&obj_path);
+
+        let mut visited: HashSet<String> = HashSet::new();
+        visited.insert(object_id.to_string());
+        let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+        queue.push_back((object_id.to_string(), 0));
+
+        let mut direct_set: HashSet<String> = HashSet::new();
+        let mut ordered_dependents: Vec<(usize, String)> = Vec::new();
+
+        while let Some((curr_id, depth)) = queue.pop_front() {
+            let incoming = self.object_relations(&curr_id, GraphDirection::Incoming)?;
+            let mut layer_next: Vec<(String, String)> = incoming
+                .into_iter()
+                .map(|edge| (edge.from_object_id, normalize(&edge.from_path)))
+                .collect();
+            layer_next.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+
+            for (dep_id, dep_path) in layer_next {
+                if depth == 0 && dep_id != object_id {
+                    direct_set.insert(dep_id.clone());
+                }
+                if visited.insert(dep_id.clone()) {
+                    let next_depth = depth + 1;
+                    ordered_dependents.push((next_depth, dep_path));
+                    queue.push_back((dep_id, next_depth));
+                }
+            }
+        }
+
+        let direct_dependents = direct_set.len();
+        let transitive_dependents = ordered_dependents.len();
+        ordered_dependents.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        let sample_dependents = ordered_dependents
+            .into_iter()
+            .take(8)
+            .map(|(_, p)| p)
+            .collect();
+
+        let (hub_score, role) = if let Some(proj_name) = project_name.as_deref() {
+            let hubs = self.experimental_hub_importance(proj_name, 50)?;
+            if let Some(hub) = hubs.into_iter().find(|h| h.path == rel_path) {
+                (Some(hub.hub_score), Some(hub.role))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
+        Ok(ObjectImpact {
+            path: rel_path,
+            hub_score,
+            role,
+            direct_dependents,
+            transitive_dependents,
+            sample_dependents,
+        })
+    }
 }
 
-fn is_canonical_doc_title(title: &str) -> bool {
-    let lower = title.to_ascii_lowercase();
+fn is_canonical_doc_title(title: &str) -> bool {    let lower = title.to_ascii_lowercase();
     matches!(
         lower.as_str(),
         "readme.md"
@@ -494,5 +581,73 @@ mod tests {
         assert_eq!(dq.docs[1].title, "stub.md");
         assert_eq!(dq.docs[1].tier, DocQualityTier::Stub);
         let _ = id_stub;
+    }
+
+    #[test]
+    fn experimental_why_impact_computes_transitive_blast_radius_and_cycles() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("blast", None, None).unwrap();
+        let mut batch = store.begin_index_batch().unwrap();
+
+        let mk = |path: &str, title: &str, kind: vos_core::ObjectKind, hash: &str| crate::UpsertObjectInput {
+            project_id: Some(proj.id.clone()),
+            path: path.to_string(),
+            kind,
+            title: title.to_string(),
+            summary: None,
+            content_hash: hash.to_string(),
+            size_bytes: 120,
+            modified_at: 100,
+            is_noise: false,
+            chunks: vec![format!("content {path}")],
+        };
+
+        let id_core = batch.upsert_object(mk("src/core.rs", "core.rs", vos_core::ObjectKind::Code, "h1")).unwrap().object_id().to_string();
+        let id_api = batch.upsert_object(mk("src/api.rs", "api.rs", vos_core::ObjectKind::Code, "h2")).unwrap().object_id().to_string();
+        let id_cli = batch.upsert_object(mk("src/cli.rs", "cli.rs", vos_core::ObjectKind::Code, "h3")).unwrap().object_id().to_string();
+        let id_spec = batch.upsert_object(mk("SPEC.md", "SPEC.md", vos_core::ObjectKind::Note, "h4")).unwrap().object_id().to_string();
+
+        batch.sync_relations(
+            &[id_core.clone(), id_api.clone(), id_cli.clone(), id_spec.clone()],
+            &[
+                crate::RelationInput {
+                    from_object_id: id_api.clone(),
+                    to_object_id: id_core.clone(),
+                    relation_type: RelationType::RustUse,
+                    confidence: 0.9,
+                    detail: None,
+                },
+                crate::RelationInput {
+                    from_object_id: id_spec.clone(),
+                    to_object_id: id_core.clone(),
+                    relation_type: RelationType::MdLink,
+                    confidence: 0.95,
+                    detail: None,
+                },
+                crate::RelationInput {
+                    from_object_id: id_cli.clone(),
+                    to_object_id: id_api.clone(),
+                    relation_type: RelationType::RustUse,
+                    confidence: 0.9,
+                    detail: None,
+                },
+                crate::RelationInput {
+                    from_object_id: id_api.clone(),
+                    to_object_id: id_cli.clone(),
+                    relation_type: RelationType::PathRef,
+                    confidence: 0.7,
+                    detail: None,
+                },
+            ],
+        ).unwrap();
+        batch.commit().unwrap();
+
+        let impact = store.experimental_why_impact(&id_core).unwrap();
+        assert_eq!(impact.path, "src/core.rs");
+        assert_eq!(impact.direct_dependents, 2);
+        assert_eq!(impact.transitive_dependents, 3);
+        assert_eq!(impact.sample_dependents, vec!["SPEC.md", "src/api.rs", "src/cli.rs"]);
+        assert!(impact.hub_score.is_some());
+        assert_eq!(impact.role.as_deref(), Some("Core Provider"));
     }
 }
