@@ -19,4 +19,5 @@ SQLite persistence, FTS5 search, project context recovery, dependency graph, and
 - [`src/workflow.rs`](src/workflow.rs) — `ProjectSnapshot` diffs, `WorkSession` tracking, and `SessionStats`.
 - [`src/experimental.rs`](src/experimental.rs) — `predict_recovery_difficulty`, `experimental_hub_importance`, `experimental_doc_quality`, and `experimental_why_impact`.
 - [`src/benchmark.rs`](src/benchmark.rs) — YAML search accuracy evaluator and `benchmark_runs` history.
+- [`src/cognitive.rs`](src/cognitive.rs) — hash-anchored facts (`facts_fts`), area leases, handoffs, and cross-project recall.
 - [`src/concepts.rs`](src/concepts.rs) — concept expansion and query intent detection from `config/concepts.yaml`.

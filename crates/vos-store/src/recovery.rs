@@ -259,6 +259,7 @@ impl Store {
             .next();
 
         let git = crate::git::inspect_git_context(resume.project.root_path.as_deref());
+        let (stale_facts_count, active_leases, latest_handoff) = self.cognitive_summary_for_project(&resume.project.id, &resume.project.name)?;
         Ok(ProjectContinue {
             resume,
             continue_from,
@@ -268,6 +269,9 @@ impl Store {
             coverage_warnings,
             dependency_hubs: graph.hubs,
             git,
+            stale_facts_count,
+            active_leases,
+            latest_handoff,
             last_session,
         })
     }

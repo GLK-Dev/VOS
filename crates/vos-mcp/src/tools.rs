@@ -11,7 +11,7 @@ use vos_core::compact::{
 use vos_core::util::now_unix;
 use vos_core::{GraphDirection, ObjectKind};
 use vos_indexer::{IndexOptions, IndexReport, InitOptions, index_path_with_options, init_project};
-use vos_store::{SearchFilters, Store};
+use vos_store::{HandoffInput, SearchFilters, Store};
 
 use crate::McpError;
 
@@ -393,6 +393,87 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                 "additionalProperties": false
             }
         }),
+        json!({
+            "name": "vos_fact",
+            "description": "Add, list, verify, or archive hash-anchored project facts (automatically marked stale when bound files change).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["add", "list", "verify", "archive"], "description": "Operation mode." },
+                    "project": { "type": "string", "description": "Project name." },
+                    "text": { "type": "string", "description": "Fact statement (required for action=add)." },
+                    "file": { "type": "string", "description": "Optional file path to anchor with SHA-256 content_hash." },
+                    "symbol": { "type": "string", "description": "Optional symbol anchor." },
+                    "author": { "type": "string", "description": "Author/agent identifier." },
+                    "id": { "type": "string", "description": "Fact ID (required for verify/archive)." },
+                    "include_archived": { "type": "boolean", "description": "Include archived facts when listing." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 200 }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_claim",
+            "description": "Claim a directory/area lease in a project to prevent parallel-agent edit collisions.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string" },
+                    "area": { "type": "string" },
+                    "agent": { "type": "string" },
+                    "ttl_mins": { "type": "integer", "minimum": 1, "maximum": 1440 },
+                    "note": { "type": "string" }
+                },
+                "required": ["project", "area", "agent"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_release",
+            "description": "Release active area leases in a project.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string" },
+                    "area": { "type": "string" },
+                    "agent": { "type": "string" }
+                },
+                "required": ["project"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_handoff",
+            "description": "Record a structured handoff note between agents/sessions (releases sender leases by default).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string" },
+                    "from": { "type": "string" },
+                    "summary": { "type": "string" },
+                    "to": { "type": "string" },
+                    "next": { "type": "string" },
+                    "files": { "type": "array", "items": { "type": "string" } },
+                    "keep_leases": { "type": "boolean" }
+                },
+                "required": ["project", "from", "summary"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_recall",
+            "description": "Search across all registered projects' verified facts, handoffs, session notes, Git commits, and code/docs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 40 }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }
+        }),
     ]
 }
 
@@ -569,6 +650,54 @@ pub(crate) fn execute_tool(store: &mut Store, name: &str, args: &Value) -> Resul
             } else {
                 Err(McpError::InvalidParams("provide 'query' or 'file'".into()))
             }
+        }
+        "vos_fact" => handle_fact_tool(store, &args_obj),
+        "vos_claim" => {
+            let project = require_str(&args_obj, "project")?;
+            let area = require_str(&args_obj, "area")?;
+            let agent = require_str(&args_obj, "agent")?;
+            let ttl_mins = opt_usize(&args_obj, "ttl_mins")?.unwrap_or(30) as u64;
+            let note = opt_str(&args_obj, "note")?;
+            Ok(serde_json::to_value(store.claim_area(project, area, agent, ttl_mins, note)?)?)
+        }
+        "vos_release" => {
+            let project = require_str(&args_obj, "project")?;
+            let area = opt_str(&args_obj, "area")?;
+            let agent = opt_str(&args_obj, "agent")?;
+            let count = store.release_area(project, area, agent)?;
+            Ok(json!({ "released": count }))
+        }
+        "vos_handoff" => {
+            let project = require_str(&args_obj, "project")?;
+            let from = require_str(&args_obj, "from")?;
+            let summary = require_str(&args_obj, "summary")?;
+            let to = opt_str(&args_obj, "to")?;
+            let next = opt_str(&args_obj, "next")?;
+            let keep_leases = opt_bool(&args_obj, "keep_leases")?.unwrap_or(false);
+            let files: Vec<String> = match args_obj.get("files") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(arr)) => arr
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect(),
+                Some(_) => return Err(McpError::InvalidParams("'files' must be a string array".into())),
+            };
+            Ok(serde_json::to_value(store.record_handoff(HandoffInput {
+                project_name: project,
+                from_agent: from,
+                to_agent: to,
+                summary,
+                next_step: next,
+                files: &files,
+                release_leases: !keep_leases,
+            })?)?)
+        }
+        "vos_recall" => {
+            let query = require_str(&args_obj, "query")?;
+            let limit = opt_usize(&args_obj, "limit")?.unwrap_or(15).clamp(1, 40);
+            Ok(serde_json::to_value(store.recall_solutions(query, limit)?)?)
         }
         _ => Err(McpError::UnknownTool(name.to_string())),
     }
@@ -841,6 +970,38 @@ fn handle_snapshot(store: &Store, args: &Value) -> Result<Value, McpError> {
         }
         other => Err(McpError::InvalidParams(format!(
             "unknown snapshot action '{other}' (expected create|list|compare_live)"
+        ))),
+    }
+}
+
+fn handle_fact_tool(store: &mut Store, args: &Value) -> Result<Value, McpError> {
+    let action = require_str(args, "action")?;
+    match action {
+        "add" => {
+            let project = opt_str(args, "project")?;
+            let text = require_str(args, "text")?;
+            let file = opt_str(args, "file")?;
+            let symbol = opt_str(args, "symbol")?;
+            let author = opt_str(args, "author")?;
+            Ok(serde_json::to_value(store.add_fact(project, text, file, symbol, author)?)?)
+        }
+        "list" => {
+            let project = opt_str(args, "project")?;
+            let include_archived = opt_bool(args, "include_archived")?.unwrap_or(false);
+            let limit = opt_usize(args, "limit")?.unwrap_or(30).clamp(1, 200);
+            Ok(serde_json::to_value(store.list_facts(project, include_archived, limit)?)?)
+        }
+        "verify" => {
+            let id = require_str(args, "id")?;
+            Ok(serde_json::to_value(store.verify_fact(id)?)?)
+        }
+        "archive" => {
+            let id = require_str(args, "id")?;
+            store.archive_fact(id)?;
+            Ok(json!({ "archived": id }))
+        }
+        other => Err(McpError::InvalidParams(format!(
+            "unknown fact action '{other}' (expected add|list|verify|archive)"
         ))),
     }
 }

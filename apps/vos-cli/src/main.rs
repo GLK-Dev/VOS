@@ -20,7 +20,7 @@ fn is_compact_json() -> bool {
     COMPACT_JSON.load(Ordering::Relaxed)
 }
 use vos_indexer::{IndexOptions, InitOptions, WatchOptions, index_path_with_options, init_project, watch_path_with_options};
-use vos_store::{SearchFilters, Store, load_benchmark_cases};
+use vos_store::{HandoffInput, SearchFilters, Store, load_benchmark_cases};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -90,6 +90,68 @@ enum Commands {
         project: Option<String>,
         /// Max symbols to return.
         #[arg(long, default_value_t = 25)]
+        limit: usize,
+    },
+    /// Manage hash-anchored project facts (`add`, `list`, `verify`, `archive`).
+    Fact {
+        #[command(subcommand)]
+        action: FactCommands,
+    },
+    /// Claim an area lease in a project to prevent parallel-agent edit collisions.
+    Claim {
+        /// Registered project name.
+        project: String,
+        /// Directory/area path to lock.
+        area: String,
+        /// Agent or developer identifier.
+        #[arg(long)]
+        agent: String,
+        /// Lease TTL in minutes.
+        #[arg(long, default_value_t = 30)]
+        ttl_mins: u64,
+        /// Optional task note.
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Release active area leases in a project.
+    Release {
+        /// Registered project name.
+        project: String,
+        /// Optional specific area to release (omit to release all matching --agent).
+        area: Option<String>,
+        /// Optional agent identifier filter.
+        #[arg(long)]
+        agent: Option<String>,
+    },
+    /// Record a structured agent/session handoff note (releases the sender's leases by default).
+    Handoff {
+        /// Registered project name.
+        project: String,
+        /// Sender agent or developer name.
+        #[arg(long)]
+        from: String,
+        /// Handoff summary of completed state.
+        #[arg(long)]
+        summary: String,
+        /// Optional target recipient agent/developer.
+        #[arg(long)]
+        to: Option<String>,
+        /// Recommended next step.
+        #[arg(long)]
+        next: Option<String>,
+        /// Comma-separated file paths touched.
+        #[arg(long, value_delimiter = ',')]
+        files: Vec<String>,
+        /// Keep active area leases held by `--from` instead of releasing them.
+        #[arg(long)]
+        keep_leases: bool,
+    },
+    /// Recall solutions, facts, handoffs, sessions, and commits across all registered projects.
+    Recall {
+        /// Problem symptom, pattern, or keyword query.
+        query: String,
+        /// Max hits across sources.
+        #[arg(long, default_value_t = 15)]
         limit: usize,
     },
     /// Register a directory as a VOS project, index it, and configure MCP clients.
@@ -534,6 +596,48 @@ enum BenchmarkCommands {
 }
 
 #[derive(Debug, Subcommand)]
+enum FactCommands {
+    /// Add a verified engineering fact (optionally anchored to a file hash and symbol).
+    Add {
+        /// Fact statement to remember.
+        text: String,
+        /// Optional registered project name.
+        #[arg(long)]
+        project: Option<String>,
+        /// Optional file target to anchor with its current SHA-256 content_hash.
+        #[arg(long)]
+        file: Option<String>,
+        /// Optional symbol name inside `--file`.
+        #[arg(long)]
+        symbol: Option<String>,
+        /// Author or agent name.
+        #[arg(long)]
+        author: Option<String>,
+    },
+    /// List active and stale project facts.
+    List {
+        /// Optional project filter.
+        project: Option<String>,
+        /// Include archived facts.
+        #[arg(long)]
+        all: bool,
+        /// Max facts to display.
+        #[arg(long, default_value_t = 30)]
+        limit: usize,
+    },
+    /// Re-verify a stale fact against its anchored file's current hash.
+    Verify {
+        /// Fact ID (e.g. fact_...).
+        id: String,
+    },
+    /// Archive a fact cleanly.
+    Archive {
+        /// Fact ID (e.g. fact_...).
+        id: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum ProjectCommands {
     /// Create a new project bound to a root directory.
     Create {
@@ -609,6 +713,89 @@ fn execute_cli(cli: Cli) -> Result<()> {
     let json = cli.json;
     match cli.command {
         Commands::Mcp => vos_mcp::serve_stdio(&mut store)?,
+        Commands::Fact { action } => handle_fact(&mut store, action, json)?,
+        Commands::Claim {
+            project,
+            area,
+            agent,
+            ttl_mins,
+            note,
+        } => {
+            let lease = store.claim_area(&project, &area, &agent, ttl_mins, note.as_deref())?;
+            if json {
+                return print_json(&lease);
+            }
+            println!(
+                "Claimed area '{}' in {} by {} until {} ({})",
+                lease.area,
+                lease.project_name,
+                lease.agent_id,
+                format_day(lease.expires_at),
+                lease.id
+            );
+        }
+        Commands::Release {
+            project,
+            area,
+            agent,
+        } => {
+            let released = store.release_area(&project, area.as_deref(), agent.as_deref())?;
+            if json {
+                return print_json(&serde_json::json!({ "released": released }));
+            }
+            println!("Released {released} lease(s) in {project}.");
+        }
+        Commands::Handoff {
+            project,
+            from,
+            summary,
+            to,
+            next,
+            files,
+            keep_leases,
+        } => {
+            let hoff = store.record_handoff(HandoffInput {
+                project_name: &project,
+                from_agent: &from,
+                to_agent: to.as_deref(),
+                summary: &summary,
+                next_step: next.as_deref(),
+                files: &files,
+                release_leases: !keep_leases,
+            })?;
+            if json {
+                return print_json(&hoff);
+            }
+            println!(
+                "Recorded handoff {} ({} -> {}) for {}",
+                hoff.id,
+                hoff.from_agent,
+                hoff.to_agent.as_deref().unwrap_or("anyone"),
+                hoff.project_name
+            );
+        }
+        Commands::Recall { query, limit } => {
+            let hits = store.recall_solutions(&query, limit)?;
+            if json {
+                return print_json(&hits);
+            }
+            if hits.is_empty() {
+                println!("No cross-project recall hits for \"{query}\".");
+            } else {
+                for (idx, hit) in hits.iter().enumerate() {
+                    let stale = if hit.is_stale == Some(true) { " [STALE]" } else { "" };
+                    println!(
+                        "{}. [{} | {}]{stale} {} ({})",
+                        idx + 1,
+                        hit.source,
+                        hit.project_name.as_deref().unwrap_or("-"),
+                        hit.title,
+                        hit.ref_id
+                    );
+                    println!("   {}", hit.excerpt);
+                }
+            }
+        }
         Commands::Archaeology {
             target,
             project,
@@ -1275,6 +1462,7 @@ fn execute_cli(cli: Cli) -> Result<()> {
             if let Some(ref git) = st.git {
                 print_git_context(git);
             }
+            print_cognitive_summary(st.stale_facts_count, &st.active_leases, st.latest_handoff.as_ref());
 
             println!("\nLast change:");
             match st.last_change_at {
@@ -1478,6 +1666,7 @@ fn execute_cli(cli: Cli) -> Result<()> {
             if let Some(ref git) = cont.git {
                 print_git_context(git);
             }
+            print_cognitive_summary(cont.stale_facts_count, &cont.active_leases, cont.latest_handoff.as_ref());
             if let Some(ref sess) = cont.last_session {
                 print_last_session(sess);
             }
@@ -3268,6 +3457,12 @@ struct JsonContinueReport<'a> {
     last_session: Option<&'a vos_core::WorkSession>,
     #[serde(skip_serializing_if = "Option::is_none")]
     git: Option<&'a vos_core::GitContext>,
+    #[serde(skip_serializing_if = "is_zero_usize")]
+    stale_facts_count: usize,
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    active_leases: &'a [vos_core::AreaLease],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_handoff: Option<&'a vos_core::AgentHandoff>,
     #[serde(skip_serializing_if = "Option::is_none")]
     recovery_prediction: Option<vos_core::RecoveryPrediction>,
 }
@@ -3295,9 +3490,116 @@ impl<'a> JsonContinueReport<'a> {
                 .collect(),
             last_session: cont.last_session.as_ref(),
             git: cont.git.as_ref(),
+            stale_facts_count: cont.stale_facts_count,
+            active_leases: &cont.active_leases,
+            latest_handoff: cont.latest_handoff.as_ref(),
             recovery_prediction,
         }
     }
+}
+
+const fn is_zero_usize(v: &usize) -> bool {
+    *v == 0
+}
+
+fn print_cognitive_summary(
+    stale_facts: usize,
+    leases: &[vos_core::AreaLease],
+    handoff: Option<&vos_core::AgentHandoff>,
+) {
+    if stale_facts == 0 && leases.is_empty() && handoff.is_none() {
+        return;
+    }
+    println!("\nCognitive Bus:");
+    if stale_facts > 0 {
+        println!("  Stale facts needing re-check: {stale_facts} (run `vos fact list`)");
+    }
+    for lease in leases {
+        println!(
+            "  Lease: {} claimed by {} (until {})",
+            lease.area,
+            lease.agent_id,
+            format_day(lease.expires_at)
+        );
+    }
+    if let Some(h) = handoff {
+        println!(
+            "  Latest handoff ({} -> {}): {}",
+            h.from_agent,
+            h.to_agent.as_deref().unwrap_or("anyone"),
+            h.summary
+        );
+    }
+}
+
+fn handle_fact(store: &mut Store, action: FactCommands, json: bool) -> Result<()> {
+    match action {
+        FactCommands::Add {
+            text,
+            project,
+            file,
+            symbol,
+            author,
+        } => {
+            let fact = store.add_fact(
+                project.as_deref(),
+                &text,
+                file.as_deref(),
+                symbol.as_deref(),
+                author.as_deref(),
+            )?;
+            if json {
+                return print_json(&fact);
+            }
+            println!(
+                "Fact saved: {} ({}{})",
+                fact.id,
+                fact.status,
+                fact.path
+                    .as_deref()
+                    .map(|p| format!(" @ {p}"))
+                    .unwrap_or_default()
+            );
+        }
+        FactCommands::List {
+            project,
+            all,
+            limit,
+        } => {
+            let facts = store.list_facts(project.as_deref(), all, limit)?;
+            if json {
+                return print_json(&facts);
+            }
+            if facts.is_empty() {
+                println!("No facts recorded.");
+            } else {
+                for f in facts {
+                    println!(
+                        "- [{} | {}] {} ({})",
+                        f.status,
+                        f.id,
+                        f.fact_text,
+                        f.path.as_deref().unwrap_or("project-wide")
+                    );
+                }
+            }
+        }
+        FactCommands::Verify { id } => {
+            let fact = store.verify_fact(&id)?;
+            if json {
+                return print_json(&fact);
+            }
+            println!("Verified fact {} ({})", fact.id, fact.status);
+        }
+        FactCommands::Archive { id } => {
+            store.archive_fact(&id)?;
+            if json {
+                return print_json(&serde_json::json!({ "archived": id }));
+            }
+            println!("Archived fact {id}.");
+        }
+    }
+    Ok(())
 }
 
 fn print_git_context(git: &vos_core::GitContext) {

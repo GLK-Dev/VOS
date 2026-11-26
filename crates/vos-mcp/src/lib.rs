@@ -327,6 +327,11 @@ mod tests {
             (11, "vos_symbols", json!({ "file": "src/lib.rs", "project": "fullmcp" })), 
             (12, "vos_slice", json!({ "target": "src/lib.rs", "project": "fullmcp", "symbol": "v" })), 
             (13, "vos_archaeology", json!({ "target": "src/lib.rs", "project": "fullmcp" })),
+            (14, "vos_fact", json!({ "action": "add", "project": "fullmcp", "text": "v() returns unit", "file": "src/lib.rs", "author": "mcp" })), 
+            (15, "vos_claim", json!({ "project": "fullmcp", "area": "src", "agent": "mcp-1" })), 
+            (16, "vos_handoff", json!({ "project": "fullmcp", "from": "mcp-1", "summary": "verified v1.4 recall" })), 
+            (17, "vos_release", json!({ "project": "fullmcp" })), 
+            (18, "vos_recall", json!({ "query": "v1.4" })),
         ] {
             let req = json!({
                 "jsonrpc": "2.0", "id": id, "method": "tools/call",

@@ -1500,3 +1500,70 @@ fn cli_archaeology_symbols_and_slice_work_end_to_end() {
         assert!(partners.iter().any(|p| p["path"] == "src/partner.rs" && p["has_static_relation"] == false));
     }
 }
+#[test]
+fn cli_cognitive_bus_facts_leases_handoffs_and_recall_work_end_to_end() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("cogproj");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("README.md"), "# CogProj\n").unwrap();
+    fs::write(proj.join("src/lib.rs"), "pub fn stable() -> i32 { 1 }\n").unwrap();
+
+    assert_vos_ok(&db, &["init", proj.to_str().unwrap(), "--no-mcp"]);
+
+    let fact_json = assert_vos_ok(
+        &db,
+        &[
+            "fact",
+            "add",
+            "stable() must keep constant 1",
+            "--project",
+            "cogproj",
+            "--file",
+            "src/lib.rs",
+            "--author",
+            "antigravity",
+            "--json",
+        ],
+    );
+    let fact_val: serde_json::Value = serde_json::from_str(&fact_json).unwrap();
+    let fact_id = fact_val["id"].as_str().unwrap().to_string();
+    assert_eq!(fact_val["status"], "Active");
+
+    // Edit bound file -> reindex -> fact automatically transitions to stale
+    fs::write(proj.join("src/lib.rs"), "pub fn stable() -> i32 { 2 }\n").unwrap();
+    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "cogproj"]);
+
+    assert_vos_ok(&db, &["claim", "cogproj", "src", "--agent", "agent-a", "--note", "fix bug"]);
+    let (ok_conflict, _, _) = run_vos(&db, &["claim", "cogproj", "src", "--agent", "agent-b"]);
+    assert!(!ok_conflict);
+
+    assert_vos_ok(
+        &db,
+        &[
+            "handoff",
+            "cogproj",
+            "--from",
+            "agent-a",
+            "--to",
+            "agent-b",
+            "--summary",
+            "Resolved stack overflow edge case",
+            "--next",
+            "Verify release",
+        ],
+    );
+
+    let cont_json = assert_vos_ok(&db, &["continue", "cogproj", "--json", "--compact"]);
+    let cont_val: serde_json::Value = serde_json::from_str(&cont_json).unwrap();
+    assert_eq!(cont_val["stale_facts_count"], 1);
+    assert_eq!(cont_val["latest_handoff"]["from_agent"], "agent-a");
+    assert!(cont_val.get("active_leases").is_none()); // released by handoff
+
+    let verify_json = assert_vos_ok(&db, &["fact", "verify", &fact_id, "--json"]);
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&verify_json).unwrap()["status"], "Active");
+
+    let recall_json = assert_vos_ok(&db, &["recall", "stack overflow", "--json"]);
+    let recall_arr: Vec<serde_json::Value> = serde_json::from_str(&recall_json).unwrap();
+    assert!(recall_arr.iter().any(|r| r["source"] == "handoff"));
+}

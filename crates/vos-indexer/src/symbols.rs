@@ -35,19 +35,51 @@ struct OpenBraceSymbol {
 }
 
 fn extract_rust_symbols(text: &str) -> Vec<SymbolInput> {
+    struct PendingDecl {
+        name: String,
+        kind: SymbolKind,
+        signature: String,
+        start_line: usize,
+        target_depth: i32,
+    }
     let mut out = Vec::new();
     let mut stack: Vec<OpenBraceSymbol> = Vec::new();
+    let mut pending: Option<PendingDecl> = None;
     let mut brace_depth: i32 = 0;
 
     for (idx, line) in text.lines().enumerate() {
         let line_no = idx + 1;
         let trimmed = strip_slash_comment(line).trim();
         let prev_depth = brace_depth;
+        let delta = brace_delta(trimmed);
 
-        if !trimmed.is_empty() && prev_depth <= 1
+        if let Some(mut pend) = pending.take() {
+            if !trimmed.is_empty() {
+                pend.signature = truncate_sig(&format!("{} {trimmed}", pend.signature));
+            }
+            if trimmed.contains('{') && delta > 0 {
+                stack.push(OpenBraceSymbol {
+                    name: pend.name,
+                    kind: pend.kind,
+                    signature: pend.signature,
+                    start_line: pend.start_line,
+                    target_depth: pend.target_depth,
+                });
+            } else if trimmed.ends_with(';') || trimmed.ends_with('}') || line_no - pend.start_line > 20 {
+                out.push(SymbolInput {
+                    name: pend.name,
+                    kind: pend.kind,
+                    signature: pend.signature,
+                    start_line: pend.start_line,
+                    end_line: line_no,
+                });
+            } else {
+                pending = Some(pend);
+            }
+        } else if !trimmed.is_empty()
+            && prev_depth <= 1
             && let Some((kind, name)) = parse_rust_decl(trimmed)
         {
-            let delta = brace_delta(trimmed);
             if trimmed.contains('{') && delta > 0 {
                 stack.push(OpenBraceSymbol {
                     name,
@@ -56,7 +88,7 @@ fn extract_rust_symbols(text: &str) -> Vec<SymbolInput> {
                     start_line: line_no,
                     target_depth: prev_depth,
                 });
-            } else if trimmed.ends_with(';') || trimmed.ends_with('}') || !trimmed.contains('{') {
+            } else if trimmed.ends_with(';') || trimmed.ends_with('}') {
                 out.push(SymbolInput {
                     name,
                     kind,
@@ -64,10 +96,18 @@ fn extract_rust_symbols(text: &str) -> Vec<SymbolInput> {
                     start_line: line_no,
                     end_line: line_no,
                 });
+            } else {
+                pending = Some(PendingDecl {
+                    name,
+                    kind,
+                    signature: truncate_sig(trimmed),
+                    start_line: line_no,
+                    target_depth: prev_depth,
+                });
             }
         }
 
-        brace_depth += brace_delta(trimmed);
+        brace_depth += delta;
         while let Some(top) = stack.last() {
             if brace_depth <= top.target_depth {
                 if let Some(done) = stack.pop() {
@@ -557,6 +597,8 @@ impl Store {
         assert!(syms.iter().any(|s| s.name == "Store" && s.kind == SymbolKind::Struct && s.start_line == 1 && s.end_line == 3));
         assert!(syms.iter().any(|s| s.name == "compute" && s.kind == SymbolKind::Fn && s.start_line == 6 && s.end_line == 8));
         let one = extract_symbols(Path::new("src/one.rs"), ObjectKind::Code, "pub fn v() {}");
+        let multi = extract_symbols(Path::new("src/multi.rs"), ObjectKind::Code, "fn multi(\n    a: i32,\n    b: i32,\n) -> i32 {\n    a + b\n}");
+        assert!(multi.iter().any(|s| s.name == "multi" && s.start_line == 1 && s.end_line == 6));
         assert!(one.iter().any(|s| s.name == "v" && s.start_line == 1 && s.end_line == 1));
         assert!(syms.iter().any(|s| s.name == "impl Store" && s.kind == SymbolKind::Impl && s.start_line == 5 && s.end_line == 9));
     }

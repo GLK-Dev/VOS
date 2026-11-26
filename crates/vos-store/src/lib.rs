@@ -3,6 +3,7 @@
 mod archaeology;
 mod batch;
 mod benchmark;
+mod cognitive;
 mod concepts;
 mod decision;
 mod evolution;
@@ -28,6 +29,7 @@ use vos_core::{DoctorReport, EventType, ObjectRecord, Project, ProjectSummary};
 
 pub use batch::{IndexBatch, RelationInput, UpsertObjectInput, UpsertOutcome};
 pub use benchmark::load_benchmark_cases;
+pub use cognitive::HandoffInput;
 pub use graph::ActiveObjectRef;
 pub use search::SearchFilters;
 pub use workflow::format_recovery_log_row;
@@ -56,6 +58,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
     (
         "0006_symbols",
         include_str!("../../../migrations/0006_symbols.sql"),
+    ),
+    (
+        "0007_cognitive_bus",
+        include_str!("../../../migrations/0007_cognitive_bus.sql"),
     ),
 ];
 
@@ -482,7 +488,9 @@ impl Store {
             tx.execute("INSERT INTO objects_fts(objects_fts) VALUES('rebuild')", [])?;
             tx.execute("DELETE FROM symbols WHERE object_id IN (SELECT id FROM objects WHERE is_deleted = 1)", [])?;
             tx.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')", [])?;
+            tx.execute("DELETE FROM area_leases WHERE expires_at <= ?1", params![now_unix()])?;
             tx.execute("INSERT INTO symbols_fts(symbols_fts) VALUES('rebuild')", [])?;
+            tx.execute("INSERT INTO facts_fts(facts_fts) VALUES('rebuild')", [])?;
             tx.commit()?;
             repaired = true;
         }

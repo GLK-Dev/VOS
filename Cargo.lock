@@ -981,6 +981,7 @@ version = "1.2.0-experimental"
 dependencies = [
  "rusqlite",
  "serde",
+ "serde_json",
  "serde_yaml",
  "tempfile",
  "thiserror",

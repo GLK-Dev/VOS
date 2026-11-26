@@ -105,6 +105,11 @@ impl<'conn> IndexBatch<'conn> {
                 }
 
                 insert_chunks(&self.tx, &obj_id, &input.chunks)?;
+
+                let mut stale_facts = self.tx.prepare_cached(
+                    "UPDATE facts SET status = 'stale', updated_at = ?1 WHERE object_id = ?2 AND status = 'active' AND anchor_hash IS NOT NULL AND anchor_hash != ?3",
+                )?;
+                stale_facts.execute(params![self.now, obj_id, input.content_hash])?;
                 insert_event(
                     &self.tx,
                     input.project_id.as_deref(),
@@ -180,6 +185,11 @@ impl<'conn> IndexBatch<'conn> {
                 }
                 insert_chunks(&self.tx, &obj_id, &input.chunks)?;
 
+                let mut stale_facts = self.tx.prepare_cached(
+                    "UPDATE facts SET status = 'stale', updated_at = ?1 WHERE object_id = ?2 AND status = 'active' AND anchor_hash IS NOT NULL AND anchor_hash != ?3",
+                )?;
+                stale_facts.execute(params![self.now, obj_id, input.content_hash])?;
+
                 let event_type = if was_deleted {
                     EventType::Restored
                 } else {
@@ -243,6 +253,11 @@ impl<'conn> IndexBatch<'conn> {
                     .tx
                     .prepare_cached("DELETE FROM symbols WHERE object_id = ?1")?;
                 del_sym.execute(params![obj_id])?;
+
+                let mut stale_facts = self.tx.prepare_cached(
+                    "UPDATE facts SET status = 'stale', updated_at = ?1 WHERE object_id = ?2 AND status = 'active'",
+                )?;
+                stale_facts.execute(params![self.now, obj_id])?;
 
                 insert_event(
                     &self.tx,

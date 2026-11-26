@@ -3,12 +3,16 @@
 use serde::Serialize;
 
 use crate::models::{
-    ActiveArea, AreaCoverage, AreaOwnership, AreaRisk, ContinueSuggestion, DocumentationHealth,
+    ActiveArea, AgentHandoff, AreaCoverage, AreaLease, AreaOwnership, AreaRisk, ContinueSuggestion, DocumentationHealth,
     EventRecord, EventType, GitContext, GraphDirection, GraphEdge, GraphHub, GraphTreeNode, HubImportance,
     ObjectImpact, ObjectKind, ObjectRecord, ObjectWhy, ProjectContinue, ProjectGraph,
     ProjectHealth, ProjectStatus, QueryIntent, RecoveryPrediction, RelatedHit, RelationType,
     SearchHit, SearchSignal, WorkSession,
 };
+
+const fn is_zero(v: &usize) -> bool {
+    *v == 0
+}
 
 const fn is_false(v: &bool) -> bool {
     !*v
@@ -157,6 +161,12 @@ pub struct CompactContinue {
     pub last_session: Option<WorkSession>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git: Option<GitContext>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub stale_facts_count: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub active_leases: Vec<AreaLease>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_handoff: Option<AgentHandoff>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recovery_prediction: Option<RecoveryPrediction>,
 }
@@ -213,6 +223,9 @@ impl CompactContinue {
                 .collect(),
             last_session: cont.last_session.clone(),
             git: cont.git.clone(),
+            stale_facts_count: cont.stale_facts_count,
+            active_leases: cont.active_leases.clone(),
+            latest_handoff: cont.latest_handoff.clone(),
             recovery_prediction,
         }
     }
@@ -241,6 +254,12 @@ pub struct CompactStatus {
     pub risk_areas: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git: Option<GitContext>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub stale_facts_count: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub active_leases: Vec<AreaLease>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_handoff: Option<AgentHandoff>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recovery_prediction: Option<RecoveryPrediction>,
 }
@@ -274,6 +293,9 @@ impl CompactStatus {
             dependency_hubs: st.dependency_hubs.clone(),
             risk_areas: st.risk_areas.clone(),
             git: st.git.clone(),
+            stale_facts_count: st.stale_facts_count,
+            active_leases: st.active_leases.clone(),
+            latest_handoff: st.latest_handoff.clone(),
             recovery_prediction,
         }
     }

@@ -86,11 +86,19 @@ pub fn is_concept_document(path: &str, title: &str) -> bool {
     let lower_title = title.to_lowercase();
     let lower_path = path.replace('\\', "/").to_lowercase();
 
-    matches!(
-        lower_title.as_str(),
-        "spec.md"
-            | "readme.md"
-            | "agents.md"
+    let is_subcrate_readme = lower_title == "readme.md"
+        && (lower_path.contains("/crates/")
+            || lower_path.contains("/apps/")
+            || lower_path.contains("/scripts/")
+            || lower_path.contains("/design/")
+            || lower_path.contains("/tests/"));
+
+    (!is_subcrate_readme
+        && matches!(
+            lower_title.as_str(),
+            "spec.md"
+                | "readme.md"
+                | "agents.md"
             | "design_manifesto.md"
             | "whitepaper.md"
             | "architecture.md"
@@ -101,7 +109,7 @@ pub fn is_concept_document(path: &str, title: &str) -> bool {
             | "0001_init.sql"
             | "project_memory.md"
             | "operating_system.md"
-    ) || lower_path.contains("/docs/architecture/")
+        )) || lower_path.contains("/docs/architecture/")
         || (lower_title.ends_with(".md")
             && (lower_title.contains("architecture")
                 || lower_title.contains("spec")

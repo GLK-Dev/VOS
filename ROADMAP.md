@@ -54,7 +54,7 @@ Move from file-level memory to **symbol-level precision + causal "why was this c
 
 ---
 
-## v1.4 — Multi-Agent Cognitive Bus & Cross-Repo Recall
+## v1.4 — Multi-Agent Cognitive Bus & Cross-Repo Recall (`Implemented`)
 
 Solve the real failure modes that appear when multiple AI assistants (`Claude Code`, `Antigravity`, `Gemini CLI`, `GitHub Copilot`) and a human developer collaborate on the same repo—and across multiple personal repos.
 

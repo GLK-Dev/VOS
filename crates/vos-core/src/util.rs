@@ -72,7 +72,7 @@ pub fn classify_path(path: &Path) -> ObjectKind {
             || lower.starts_with(".env.")
             || matches!(
                 lower.as_str(),
-                "cmakelists.txt" | "requirements.txt" | "constraints.txt" | "robots.txt"
+                "cmakelists.txt" | "requirements.txt" | "constraints.txt" | "robots.txt" | ".gitignore" | ".vosignore" | ".gitattributes" | ".editorconfig"
             )
         {
             return ObjectKind::Config;

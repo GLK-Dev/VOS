@@ -1,4 +1,8 @@
 use serde::{Deserialize, Serialize};
+
+const fn is_zero(v: &usize) -> bool {
+    *v == 0
+}
 use std::fmt;
 
 /// Classification of an indexed filesystem object.
@@ -363,6 +367,12 @@ pub struct ProjectContinue {
     pub last_session: Option<WorkSession>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git: Option<GitContext>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub stale_facts_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub active_leases: Vec<AreaLease>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_handoff: Option<AgentHandoff>,
 }
 /// Combined daily-launch briefing returned by `vos start <project>`.
 #[derive(Debug, Clone, Serialize)]
@@ -515,6 +525,12 @@ pub struct ProjectStatus {
     pub risk_areas: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git: Option<GitContext>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub stale_facts_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub active_leases: Vec<AreaLease>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_handoff: Option<AgentHandoff>,
 }
 
 /// Deterministic concept explanation assembled from project docs, code, and `config/concepts.yaml`.
@@ -1159,4 +1175,100 @@ pub struct FileSlice {
     pub symbols: Vec<SymbolRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+}
+
+/// Lifecycle status of a hash-anchored project fact (`vos fact`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum FactStatus {
+    Active,
+    Stale,
+    Archived,
+}
+
+impl FactStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Stale => "stale",
+            Self::Archived => "archived",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "stale" => Self::Stale,
+            "archived" => Self::Archived,
+            _ => Self::Active,
+        }
+    }
+}
+
+impl fmt::Display for FactStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Hash-anchored verified project fact stored in SQLite (`facts`).
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectFact {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    pub fact_text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    pub status: FactStatus,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub verified_at: i64,
+}
+
+/// Active multi-agent lease claiming work ownership on a project directory/area (`vos claim`).
+#[derive(Debug, Clone, Serialize)]
+pub struct AreaLease {
+    pub id: String,
+    pub project_name: String,
+    pub area: String,
+    pub agent_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    pub claimed_at: i64,
+    pub expires_at: i64,
+}
+
+/// Structured multi-agent / session handoff record (`vos handoff`).
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentHandoff {
+    pub id: String,
+    pub project_name: String,
+    pub from_agent: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_agent: Option<String>,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_step: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+    pub created_at: i64,
+}
+
+/// Cross-project solution recall match returned by `vos recall`.
+#[derive(Debug, Clone, Serialize)]
+pub struct RecallHit {
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
+    pub ref_id: String,
+    pub title: String,
+    pub excerpt: String,
+    pub timestamp: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_stale: Option<bool>,
 }

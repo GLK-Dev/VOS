@@ -450,6 +450,9 @@ mod tests {
                 dependency_hubs: Vec::new(),
                 risk_areas: Vec::new(),
                 git: None,
+                stale_facts_count: 0,
+                active_leases: Vec::new(),
+                latest_handoff: None,
             },
             now,
         )

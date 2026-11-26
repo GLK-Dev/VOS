@@ -151,6 +151,7 @@ impl Store {
         }
 
         let git = crate::git::inspect_git_context(resume.project.root_path.as_deref());
+        let (stale_facts_count, active_leases, latest_handoff) = self.cognitive_summary_for_project(&resume.project.id, &resume.project.name)?;
         Ok(ProjectStatus {
             project: resume.project,
             health,
@@ -168,6 +169,9 @@ impl Store {
             critical_areas,
             dependency_hubs,
             git,
+            stale_facts_count,
+            active_leases,
+            latest_handoff,
             risk_areas,
         })
     }

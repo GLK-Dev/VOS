@@ -772,7 +772,7 @@ fn score_search_candidate(
     let mut matched_terms = HashSet::new();
 
     for term in query_terms {
-        if title_lower == *term || stem_lower == *term {
+        if title_lower == *term || stem_lower == *term || stem_lower.trim_start_matches('.') == *term {
             exact_title_hit = true;
         } else if term.len() >= 3 && title_lower.contains(term) {
             partial_title_hit = true;
@@ -817,8 +817,8 @@ fn score_search_candidate(
             });
         }
         if !phrase_lower.is_empty()
-            && (title_lower.contains(phrase_lower)
-                || path_lower.contains(phrase_lower)
+            && (contains_phrase(&title_lower, phrase_lower)
+                || contains_phrase(&path_lower, phrase_lower)
                 || cand.observed_text_lower.contains(phrase_lower))
         {
             signals.push(SearchSignal {
@@ -876,6 +876,21 @@ fn score_search_candidate(
 
     let total: f64 = signals.iter().map(|s| s.delta).sum();
     (total, signals)
+}
+
+fn contains_phrase(haystack_lower: &str, phrase_lower: &str) -> bool {
+    if haystack_lower.contains(phrase_lower) {
+        return true;
+    }
+    let compact_phrase = phrase_lower.replace(' ', "");
+    if compact_phrase.len() >= 6 && haystack_lower.contains(&compact_phrase) {
+        return true;
+    }
+    let snake_phrase = phrase_lower.replace(' ', "_");
+    if haystack_lower.contains(&snake_phrase) {
+        return true;
+    }
+    false
 }
 
 fn build_fts_query(raw: &str) -> Result<String, StoreError> {
