@@ -1210,74 +1210,7 @@ fn run() -> Result<()> {
                 print_recovery_prediction(pred);
             }
         }
-        Commands::Start { project } => {
-            let start = store.project_start(&project)?;
-            if json {
-                return print_json(&start);
-            }
-            let res = &start.resume;
-            let root_prefix = res.project.root_path.as_deref().unwrap_or("");
-            println!(
-                "Project: {} ({} active objects)",
-                res.project.name, res.active_objects
-            );
-
-            println!("\nLast active:");
-            match res.last_activity_at {
-                Some(ts) => println!("  {} ({})", format_relative(ts), format_day(ts)),
-                None => println!("  never"),
-            }
-
-            println!("\nSuggested reading:");
-            if res.starting_points.is_empty() {
-                println!("  (none)");
-            } else {
-                for (idx, obj) in res.starting_points.iter().enumerate() {
-                    println!(
-                        "  {}. {}",
-                        idx + 1,
-                        display_relative(&obj.path, root_prefix)
-                    );
-                }
-            }
-
-            println!("\nRecent activity:");
-            if res.recently_modified.is_empty() {
-                println!("  (none)");
-            } else {
-                for obj in &res.recently_modified {
-                    println!(
-                        "  - [{}] {} ({})",
-                        obj.kind,
-                        display_relative(&obj.path, root_prefix),
-                        format_day(obj.modified_at)
-                    );
-                }
-            }
-
-            println!("\nMost active areas:");
-            if res.most_active_areas.is_empty() {
-                println!("  (none)");
-            } else {
-                for area in &res.most_active_areas {
-                    println!(
-                        "  - {} ({} recent files, last {})",
-                        area.area,
-                        area.object_count,
-                        format_day(area.latest_modified_at)
-                    );
-                }
-            }
-
-            println!("\nOpen questions:");
-            if start.open_questions.is_empty() {
-                println!("  (none tracked)");
-            } else {
-                for q in &start.open_questions {
-                    println!("  - {q}");
-                }
-            }
-        }
+        Commands::Start { project } => handle_start(&store, &project, experimental, json)?,
         Commands::Resume { project } => {
             let res = store.project_resume(&project)?;
             if json {
@@ -2048,6 +1981,90 @@ fn handle_search(
 }
 
 #[inline(never)]
+fn handle_start(store: &Store, project: &str, experimental: bool, json: bool) -> Result<()> {
+    let start = store.project_start(project)?;
+    let prediction = if experimental {
+        let st = store.project_status(project)?;
+        Some(store.predict_recovery_difficulty(&st))
+    } else {
+        None
+    };
+    if json {
+        return print_json(&JsonStartWithExperimental {
+            start: &start,
+            recovery_prediction: prediction,
+        });
+    }
+    let res = &start.resume;
+    let root_prefix = res.project.root_path.as_deref().unwrap_or("");
+    println!(
+        "Project: {} ({} active objects)",
+        res.project.name, res.active_objects
+    );
+
+    println!("\nLast active:");
+    match res.last_activity_at {
+        Some(ts) => println!("  {} ({})", format_relative(ts), format_day(ts)),
+        None => println!("  never"),
+    }
+
+    println!("\nSuggested reading:");
+    if res.starting_points.is_empty() {
+        println!("  (none)");
+    } else {
+        for (idx, obj) in res.starting_points.iter().enumerate() {
+            println!(
+                "  {}. {}",
+                idx + 1,
+                display_relative(&obj.path, root_prefix)
+            );
+        }
+    }
+
+    println!("\nRecent activity:");
+    if res.recently_modified.is_empty() {
+        println!("  (none)");
+    } else {
+        for obj in &res.recently_modified {
+            println!(
+                "  - [{}] {} ({})",
+                obj.kind,
+                display_relative(&obj.path, root_prefix),
+                format_day(obj.modified_at)
+            );
+        }
+    }
+
+    println!("\nMost active areas:");
+    if res.most_active_areas.is_empty() {
+        println!("  (none)");
+    } else {
+        for area in &res.most_active_areas {
+            println!(
+                "  - {} ({} recent files, last {})",
+                area.area,
+                area.object_count,
+                format_day(area.latest_modified_at)
+            );
+        }
+    }
+
+    println!("\nOpen questions:");
+    if start.open_questions.is_empty() {
+        println!("  (none tracked)");
+    } else {
+        for q in &start.open_questions {
+            println!("  - {q}");
+        }
+    }
+
+    if let Some(ref pred) = prediction {
+        print_recovery_prediction(pred);
+    }
+    Ok(())
+}
+
+#[inline(never)]
 fn handle_drift(store: &Store, project: Option<String>, all: bool, json: bool) -> Result<()> {
     if all && project.is_some() {
         anyhow::bail!("pass either a project name or --all, not both");
@@ -2780,6 +2797,14 @@ struct JsonBenchmarkSaveResult<'a> {
     report: &'a vos_core::SearchBenchmarkReport,
     #[serde(skip_serializing_if = "Option::is_none")]
     saved_run_id: Option<i64>,
+}
+
+#[derive(serde::Serialize)]
+struct JsonStartWithExperimental<'a> {
+    #[serde(flatten)]
+    start: &'a vos_core::ProjectStart,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_prediction: Option<vos_core::RecoveryPrediction>,
 }
 
 #[derive(serde::Serialize)]

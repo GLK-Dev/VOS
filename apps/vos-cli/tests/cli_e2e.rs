@@ -1213,3 +1213,35 @@ fn cli_session_stop_log_appends_recovery_row_and_requires_quality() {
     );
     assert!(lines[1].ends_with("| 4 | - | - | a/b |"), "{}", lines[1]);
 }
+
+#[test]
+fn cli_start_experimental_includes_recovery_prediction() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("startexp");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("README.md"), "# StartExp\nOPEN QUESTION: keep cache?\n").unwrap();
+    fs::write(proj.join("src").join("lib.rs"), "pub fn ping() {}\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "startexp", proj.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", "--all"]);
+
+    let plain_out = assert_vos_ok(&db, &["start", "startexp"]);
+    assert!(!plain_out.contains("Experimental Insights:"));
+
+    let plain_json: serde_json::Value =
+        serde_json::from_str(&assert_vos_ok(&db, &["start", "startexp", "--json"])).unwrap();
+    assert!(plain_json.get("recovery_prediction").is_none());
+
+    let exp_out = assert_vos_ok(&db, &["start", "startexp", "--experimental"]);
+    assert!(exp_out.contains("Experimental Insights:"));
+    assert!(exp_out.contains("Recovery Difficulty:"));
+
+    let exp_json: serde_json::Value = serde_json::from_str(&assert_vos_ok(
+        &db,
+        &["start", "startexp", "--experimental", "--json"],
+    ))
+    .unwrap();
+    assert!(exp_json["recovery_prediction"]["difficulty"].is_string());
+    assert!(exp_json["recovery_prediction"]["score"].is_number());
+}
