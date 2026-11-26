@@ -20,5 +20,12 @@ Stateless stdio **Model Context Protocol (MCP)** server crate for VOS (Velocity 
 - `vos_index`
 - `vos_session_start`
 - `vos_session_stop`
+- `vos_init`
+- `vos_coverage`
+- `vos_evolution`
+- `vos_changed_since`
+- `vos_related`
+- `vos_snapshot`
+- `vos_doctor`
 
 Launch via `vos mcp` (optionally with `--db <path>` or `VOS_DB`).

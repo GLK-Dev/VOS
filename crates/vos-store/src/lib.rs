@@ -6,6 +6,7 @@ mod concepts;
 mod decision;
 mod evolution;
 mod experimental;
+mod git;
 mod graph;
 mod insight;
 mod queries;

@@ -154,14 +154,13 @@ Global flag: `--db <path>` (or `VOS_DB` env var, defaulting to `~/.vos/vos.db`).
 - **v0.2 (Validation-driven):** PDF/rich metadata extractors, explicit `relations`, optional local embeddings if FTS5 misses semantic queries.
 - **v0.3 (Automation):** Background daemon (`vosd`) + filesystem watcher (`notify`) + local API.
 
+---
 
+## 7. VOS 1.1 – 1.2 Extensions (Implemented)
 
+Beyond the canonical v0.1 baseline above, VOS 1.2 includes the following additive migrations, commands, and agent integrations:
 
-
-
-
-
-
-
-
-
+- **Migrations:** `0001_init.sql`, `0002_noise.sql`, `0003_benchmark_history.sql`, `0004_relations.sql`, `0005_snapshots_and_sessions.sql`.
+- **Insight, Snapshot & Workflow Commands:** `vos init`, `vos graph`, `vos ownership`, `vos coverage`, `vos snapshot [--all]`, `vos compare-snapshot`, `vos drift [--all]`, `vos session start|stop|list|stats`.
+- **Git Recovery Context:** `vos status` and `vos continue` attach deterministic `GitContext` (current branch, dirty counters, last commit hash/subject/timestamp) when a project root resides in a Git repository.
+- **Agent Optimization & MCP:** global `--compact` single-line projected JSON, structured `{"error": "..."}` output on `stderr` under `--json`, and `vos mcp` (stateless newline-delimited JSON-RPC 2.0 server in `crates/vos-mcp`).

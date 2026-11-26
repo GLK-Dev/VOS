@@ -258,6 +258,7 @@ impl Store {
             .into_iter()
             .next();
 
+        let git = crate::git::inspect_git_context(resume.project.root_path.as_deref());
         Ok(ProjectContinue {
             resume,
             continue_from,
@@ -266,6 +267,7 @@ impl Store {
             ownership_areas: ownership.most_active_areas,
             coverage_warnings,
             dependency_hubs: graph.hubs,
+            git,
             last_session,
         })
     }
@@ -446,6 +448,8 @@ impl Store {
                 (RelationType::MdLink, false) => (55, "referenced in docs (md_link)".to_string()),
                 (RelationType::RustUse, true) => (50, "imports module (rust_use)".to_string()),
                 (RelationType::RustUse, false) => (50, "imported by (rust_use)".to_string()),
+                (RelationType::CodeImport, true) => (50, "imports module (code_import)".to_string()),
+                (RelationType::CodeImport, false) => (50, "imported by (code_import)".to_string()),
                 (RelationType::PathRef, true) => (35, "references file (path_ref)".to_string()),
                 (RelationType::PathRef, false) => (35, "referenced by (path_ref)".to_string()),
             };

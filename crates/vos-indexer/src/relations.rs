@@ -4,6 +4,8 @@ use std::path::{Component, Path, PathBuf};
 use vos_core::{ObjectKind, RelationType};
 use vos_store::{ActiveObjectRef, RelationInput};
 
+use crate::lang_refs::{CodeImportKind, extract_language_imports, resolve_code_import};
+
 /// Unresolved structural reference extracted from a single source file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RawRef {
@@ -26,6 +28,10 @@ pub(crate) enum RawRef {
     CargoLibIdent {
         ident: String,
     },
+    CodeImport {
+        kind: CodeImportKind,
+        spec: String,
+    },
 }
 
 /// Scanned source object metadata and extracted references waiting for ID resolution.
@@ -38,7 +44,7 @@ pub(crate) struct ScannedObjectRefs {
 }
 
 #[derive(Debug, Default)]
-struct ProjectLookup {
+pub(crate) struct ProjectLookup {
     by_norm_path: HashMap<String, String>,
     by_title: HashMap<String, Vec<String>>,
     by_workspace_crate: HashMap<String, Option<(PathBuf, String)>>,
@@ -96,7 +102,7 @@ impl ProjectLookup {
             .map(|(dir, id)| (dir.as_path(), id.as_str()))
     }
 
-    fn lookup_path(&self, candidate: &Path) -> Option<&str> {
+    pub(crate) fn lookup_path(&self, candidate: &Path) -> Option<&str> {
         let key = normalize_lexical_key(&candidate.to_string_lossy());
         self.by_norm_path.get(&key).map(String::as_str)
     }
@@ -126,6 +132,8 @@ pub(crate) fn extract_refs(path: &Path, kind: ObjectKind, text: &str) -> Vec<Raw
 
     if is_rust {
         extract_rust_refs(text, &mut refs);
+    } else {
+        extract_language_imports(path, text, &mut refs);
     }
     if is_markdown {
         extract_markdown_links(text, &mut refs);
@@ -239,6 +247,13 @@ pub(crate) fn resolve_relations(
                     })
                 }
                 RawRef::CargoLibIdent { .. } => None,
+                RawRef::CodeImport { kind, spec } => resolve_code_import(
+                    src_dir,
+                    proj_root.as_deref(),
+                    kind,
+                    spec,
+                    lookup,
+                ),
             };
 
             let Some((to_id, rel_type, detail)) = resolved else {
@@ -728,7 +743,7 @@ fn find_rust_crate_src_root(start_dir: &Path, lookup: &ProjectLookup) -> Option<
     None
 }
 
-fn resolve_relative_path(
+pub(crate) fn resolve_relative_path(
     src_dir: &Path,
     project_root: Option<&Path>,
     raw_rel: &str,
@@ -1063,5 +1078,61 @@ use super::util;
         assert!(!scanned[0].raw_refs.contains(&RawRef::CargoLibIdent {
             ident: "tessera_forge".to_string(),
         }));
+    }
+
+    #[test]
+    fn extracts_and_resolves_c_js_and_python_imports() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("include")).unwrap();
+        std::fs::create_dir_all(root.join("web/components")).unwrap();
+        std::fs::create_dir_all(root.join("py/pkg")).unwrap();
+
+        std::fs::write(root.join("include/core.h"), "void init(void);\n").unwrap();
+        std::fs::write(
+            root.join("main.c"),
+            "#include <stdio.h>\n#include \"core.h\"\nint main() { return 0; }\n",
+        )
+        .unwrap();
+
+        std::fs::write(
+            root.join("web/components/index.ts"),
+            "export const Btn = 1;\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("web/app.tsx"),
+            "import { Btn } from './components';\nimport React from 'react';\n",
+        )
+        .unwrap();
+
+        std::fs::write(root.join("py/pkg/__init__.py"), "").unwrap();
+        std::fs::write(root.join("py/pkg/utils.py"), "def ok(): pass\n").unwrap();
+        std::fs::write(
+            root.join("py/pkg/main.py"),
+            "from .utils import ok\nimport os\n",
+        )
+        .unwrap();
+
+        let mut store = vos_store::Store::open_in_memory().unwrap();
+        store.create_project("poly", Some(root), None).unwrap();
+        let rep = crate::index_path(&mut store, root, Some("poly")).unwrap();
+        assert_eq!(rep.added, 7);
+        assert!(rep.relations >= 3);
+
+        let graph = store
+            .project_graph("poly", Some("main.c"), vos_core::GraphDirection::Outgoing, 1, 5)
+            .unwrap();
+        assert_eq!(graph.hubs[0].outgoing_count, 1);
+
+        let py_graph = store
+            .project_graph("poly", Some("py/pkg/main.py"), vos_core::GraphDirection::Outgoing, 1, 5)
+            .unwrap();
+        assert_eq!(py_graph.hubs[0].outgoing_count, 1);
+
+        let js_graph = store
+            .project_graph("poly", Some("web/app.tsx"), vos_core::GraphDirection::Outgoing, 1, 5)
+            .unwrap();
+        assert_eq!(js_graph.hubs[0].outgoing_count, 1);
     }
 }

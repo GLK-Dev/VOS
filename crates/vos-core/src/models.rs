@@ -276,6 +276,22 @@ pub struct RelatedHit {
     pub reasons: Vec<String>,
 }
 
+/// Deterministic local Git state captured when a project root resides in a Git repository.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GitContext {
+    pub branch: String,
+    pub is_dirty: bool,
+    pub staged_count: usize,
+    pub modified_count: usize,
+    pub untracked_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_commit_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_commit_subject: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_commit_at: Option<i64>,
+}
+
 /// Explainable context report returned by `vos why <target>`.
 #[derive(Debug, Clone, Serialize)]
 pub struct ObjectWhy {
@@ -310,6 +326,8 @@ pub struct ProjectContinue {
     pub coverage_warnings: Vec<AreaCoverage>,
     pub dependency_hubs: Vec<GraphHub>,
     pub last_session: Option<WorkSession>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitContext>,
 }
 /// Combined daily-launch briefing returned by `vos start <project>`.
 #[derive(Debug, Clone, Serialize)]
@@ -460,6 +478,8 @@ pub struct ProjectStatus {
     pub critical_areas: Vec<AreaRisk>,
     pub dependency_hubs: Vec<String>,
     pub risk_areas: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitContext>,
 }
 
 /// Deterministic concept explanation assembled from project docs, code, and `config/concepts.yaml`.
@@ -521,6 +541,7 @@ pub struct ProjectDrift {
 pub enum RelationType {
     RustMod,
     RustUse,
+    CodeImport,
     MdLink,
     PathRef,
 }
@@ -531,6 +552,7 @@ impl RelationType {
         match self {
             Self::RustMod => "rust_mod",
             Self::RustUse => "rust_use",
+            Self::CodeImport => "code_import",
             Self::MdLink => "md_link",
             Self::PathRef => "path_ref",
         }
@@ -541,6 +563,7 @@ impl RelationType {
         match value {
             "rust_mod" => Self::RustMod,
             "rust_use" => Self::RustUse,
+            "code_import" => Self::CodeImport,
             "md_link" => Self::MdLink,
             _ => Self::PathRef,
         }
@@ -552,6 +575,7 @@ impl RelationType {
             Self::RustMod => 1.0,
             Self::MdLink => 0.95,
             Self::RustUse => 0.90,
+            Self::CodeImport => 0.90,
             Self::PathRef => 0.75,
         }
     }

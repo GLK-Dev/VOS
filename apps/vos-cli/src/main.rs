@@ -19,7 +19,7 @@ static COMPACT_JSON: AtomicBool = AtomicBool::new(false);
 fn is_compact_json() -> bool {
     COMPACT_JSON.load(Ordering::Relaxed)
 }
-use vos_indexer::{IndexOptions, index_path_with_options};
+use vos_indexer::{IndexOptions, InitOptions, index_path_with_options, init_project};
 use vos_store::{SearchFilters, Store, load_benchmark_cases};
 
 #[derive(Debug, Parser)]
@@ -53,6 +53,29 @@ struct Cli {
 enum Commands {
     /// Run a stateless JSON-RPC 2.0 MCP server over stdin/stdout (exits on EOF).
     Mcp,
+    /// Register a directory as a VOS project, index it, and configure MCP clients.
+    Init {
+        /// Project directory path (defaults to current working directory).
+        path: Option<PathBuf>,
+        /// Explicit project name (defaults to directory name).
+        #[arg(long)]
+        name: Option<String>,
+        /// Optional short project description.
+        #[arg(long)]
+        description: Option<String>,
+        /// Skip initial indexing.
+        #[arg(long)]
+        no_index: bool,
+        /// Skip creating .mcp.json and .vscode/mcp.json.
+        #[arg(long)]
+        no_mcp: bool,
+        /// Overwrite existing 'vos' MCP entries or malformed config files.
+        #[arg(long)]
+        force: bool,
+        /// Include files ignored by .gitignore / .vosignore.
+        #[arg(long)]
+        no_ignore: bool,
+    },
     /// Manage projects.
     Project {
         #[command(subcommand)]
@@ -533,6 +556,62 @@ fn execute_cli(cli: Cli) -> Result<()> {
     let json = cli.json;
     match cli.command {
         Commands::Mcp => vos_mcp::serve_stdio(&mut store)?,
+        Commands::Init {
+            path,
+            name,
+            description,
+            no_index,
+            no_mcp,
+            force,
+            no_ignore,
+        } => {
+            let target_dir = path.unwrap_or_else(|| PathBuf::from("."));
+            let report = init_project(
+                &mut store,
+                InitOptions {
+                    path: &target_dir,
+                    name: name.as_deref(),
+                    description: description.as_deref(),
+                    index: !no_index,
+                    no_ignore,
+                    setup_mcp: !no_mcp,
+                    force,
+                },
+            )?;
+            let json_report = JsonInitReport {
+                project: &report.project,
+                project_created: report.project_created,
+                index_report: report.index_report.as_ref().map(JsonIndexReport::from),
+                mcp_configs: &report.mcp_configs,
+            };
+            if json {
+                return print_json(&json_report);
+            }
+            let status_label = if report.project_created {
+                "created"
+            } else {
+                "existing"
+            };
+            println!(
+                "Project:   {} ({status_label})",
+                report.project.name
+            );
+            if let Some(root) = report.project.root_path.as_deref() {
+                println!("Root:      {root}");
+            }
+            if let Some(idx) = report.index_report {
+                println!(
+                    "Indexed:   {} scanned (added: {}, modified: {}, unchanged: {}, relations: {})",
+                    idx.scanned, idx.added, idx.modified, idx.unchanged, idx.relations
+                );
+            }
+            if !report.mcp_configs.is_empty() {
+                println!("MCP setup:");
+                for cfg in &report.mcp_configs {
+                    println!("  - {} [{}]", cfg.path, cfg.status);
+                }
+            }
+        }
         Commands::Project { action } => handle_project(&mut store, action, json)?,
         Commands::Index {
             path,
@@ -961,6 +1040,9 @@ fn execute_cli(cli: Cli) -> Result<()> {
             println!("High Risks: {}", st.high_risk_count);
             println!("Coverage: {:.1}%", st.coverage_ratio);
             println!("Documentation Health: {}", st.documentation_health);
+            if let Some(ref git) = st.git {
+                print_git_context(git);
+            }
 
             println!("\nLast change:");
             match st.last_change_at {
@@ -1161,6 +1243,9 @@ fn execute_cli(cli: Cli) -> Result<()> {
                 None => println!("  never"),
             }
 
+            if let Some(ref git) = cont.git {
+                print_git_context(git);
+            }
             if let Some(ref sess) = cont.last_session {
                 print_last_session(sess);
             }
@@ -2817,6 +2902,15 @@ fn eprint_json<T: serde::Serialize>(value: &T) -> Result<()> {
 }
 
 #[derive(serde::Serialize)]
+struct JsonInitReport<'a> {
+    project: &'a vos_core::Project,
+    project_created: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    index_report: Option<JsonIndexReport>,
+    mcp_configs: &'a [vos_indexer::McpConfigStatus],
+}
+
+#[derive(serde::Serialize)]
 struct JsonIndexReport {
     scanned: usize,
     added: usize,
@@ -2896,6 +2990,8 @@ struct JsonContinueReport<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     last_session: Option<&'a vos_core::WorkSession>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    git: Option<&'a vos_core::GitContext>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     recovery_prediction: Option<vos_core::RecoveryPrediction>,
 }
 
@@ -2921,7 +3017,27 @@ impl<'a> JsonContinueReport<'a> {
                 })
                 .collect(),
             last_session: cont.last_session.as_ref(),
+            git: cont.git.as_ref(),
             recovery_prediction,
+        }
+    }
+}
+
+fn print_git_context(git: &vos_core::GitContext) {
+    println!("\nGit:");
+    if git.is_dirty {
+        println!(
+            "  branch: {} | dirty (modified: {}, staged: {}, untracked: {})",
+            git.branch, git.modified_count, git.staged_count, git.untracked_count
+        );
+    } else {
+        println!("  branch: {} | clean", git.branch);
+    }
+    if let Some(ref hash) = git.last_commit_hash {
+        let subj = git.last_commit_subject.as_deref().unwrap_or("");
+        match git.last_commit_at {
+            Some(ts) => println!("  last commit: {hash} — {subj} ({})", format_relative(ts)),
+            None => println!("  last commit: {hash} — {subj}"),
         }
     }
 }

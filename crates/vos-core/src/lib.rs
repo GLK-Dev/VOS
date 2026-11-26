@@ -10,7 +10,7 @@ pub use models::{
     ActiveArea, AreaCoverage, AreaOwnership, AreaRisk, BenchmarkRunRecord, CategoryBenchmarkStats,
     ChangedSinceReport, ConceptExplanation, ContinueSuggestion, CoverageTier, DifficultyStats,
     DocQualityEntry, DocQualityReport, DocQualityTier, DoctorReport, DocumentationHealth,
-    DriftFinding, EventRecord, EventType, GraphDirection, GraphEdge, GraphHub, GraphTreeNode,
+    DriftFinding, EventRecord, EventType, GitContext, GraphDirection, GraphEdge, GraphHub, GraphTreeNode,
     HubImportance, ObjectDetails, ObjectImpact, ObjectKind, ObjectRecord, ObjectWhy, Project,
     ProjectActivity, ProjectContext, ProjectContinue, ProjectCoverage, ProjectDrift,
     ProjectEvolution, ProjectGraph, ProjectHealth, ProjectOwnership, ProjectResume,

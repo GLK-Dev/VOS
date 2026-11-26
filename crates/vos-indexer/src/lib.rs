@@ -1,6 +1,10 @@
 //! Deterministic directory walker, text extractor, and single-transaction batch indexer for VOS.
 
+mod lang_refs;
 mod relations;
+mod setup;
+
+pub use setup::{InitOptions, InitReport, McpConfigStatus, init_project};
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;

@@ -297,4 +297,37 @@ mod tests {
         let stop_resp = handle_request(&mut store, &stop_req).unwrap();
         assert_eq!(stop_resp["result"]["isError"], false);
     }
+
+    #[test]
+    fn mcp_supports_init_coverage_snapshot_evolution_and_doctor() {
+        let tmp = TempDir::new().unwrap();
+        let proj = tmp.path().join("fullmcp");
+        fs::create_dir_all(proj.join("src")).unwrap();
+        fs::write(proj.join("README.md"), "# FullMCP\nSee `src/lib.rs`.\n").unwrap();
+        fs::write(proj.join("src/lib.rs"), "pub fn v() {}\n").unwrap();
+
+        let mut store = Store::open_in_memory().unwrap();
+        let init_req = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": "vos_init", "arguments": { "path": proj.to_str().unwrap(), "setup_mcp": false } }
+        });
+        let init_resp = handle_request(&mut store, &init_req).unwrap();
+        assert_eq!(init_resp["result"]["isError"], false);
+
+        for (id, tool, args) in [
+            (2, "vos_coverage", json!({ "project": "fullmcp" })),
+            (3, "vos_evolution", json!({ "project": "fullmcp", "since": "7d" })),
+            (4, "vos_changed_since", json!({ "project": "fullmcp", "since": "7d" })),
+            (5, "vos_related", json!({ "target": "src/lib.rs", "project": "fullmcp" })),
+            (6, "vos_snapshot", json!({ "action": "create", "project": "fullmcp", "label": "s1" })),
+            (7, "vos_doctor", json!({ "repair": false })),
+        ] {
+            let req = json!({
+                "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                "params": { "name": tool, "arguments": args }
+            });
+            let resp = handle_request(&mut store, &req).unwrap();
+            assert_eq!(resp["result"]["isError"], false, "tool {tool} failed: {resp}");
+        }
+    }
 }

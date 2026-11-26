@@ -10,7 +10,7 @@ use vos_core::compact::{
 };
 use vos_core::util::now_unix;
 use vos_core::{GraphDirection, ObjectKind};
-use vos_indexer::{IndexOptions, IndexReport, index_path_with_options};
+use vos_indexer::{IndexOptions, IndexReport, InitOptions, index_path_with_options, init_project};
 use vos_store::{SearchFilters, Store};
 
 use crate::McpError;
@@ -213,6 +213,103 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                 "additionalProperties": false
             }
         }),
+        json!({
+            "name": "vos_init",
+            "description": "Idempotently register a project directory, index it, and scaffold .mcp.json and .vscode/mcp.json.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Directory path to initialize (defaults to '.')." },
+                    "name": { "type": "string", "description": "Explicit project name (defaults to directory slug)." },
+                    "description": { "type": "string", "description": "Optional short description." },
+                    "index": { "type": "boolean", "description": "Index directory immediately (default: true)." },
+                    "setup_mcp": { "type": "boolean", "description": "Scaffold .mcp.json and .vscode/mcp.json (default: true)." },
+                    "force": { "type": "boolean", "description": "Overwrite existing 'vos' MCP entries (default: false)." },
+                    "no_ignore": { "type": "boolean", "description": "Include ignored files when indexing (default: false)." }
+                },
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_coverage",
+            "description": "Report relation-weighted documentation coverage by area and optional doc quality scores.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string", "description": "Registered VOS project name." },
+                    "experimental": { "type": "boolean", "description": "Include documentation quality metrics (default: true)." }
+                },
+                "required": ["project"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_evolution",
+            "description": "Summarize added/modified/deleted activity, emerging hotspots, and unresolved signals since a date or offset.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string", "description": "Registered VOS project name." },
+                    "since": { "type": "string", "description": "Start date/offset (YYYY-MM-DD, 30d, 2w, today; default: 30d)." }
+                },
+                "required": ["project"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_changed_since",
+            "description": "List files added, modified, or deleted since a date or relative offset.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "since": { "type": "string", "description": "Start date/offset (YYYY-MM-DD, 7d, 12h, today, yesterday)." },
+                    "project": { "type": "string", "description": "Optional project filter." }
+                },
+                "required": ["since"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_related",
+            "description": "Find files deterministically related to a target via directory proximity, shared tags, co-activity, or links.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": { "type": "string", "description": "Object ID, title, or relative/suffix file path." },
+                    "project": { "type": "string", "description": "Optional project scope." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 30, "description": "Max related hits (default: 8)." }
+                },
+                "required": ["target"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_snapshot",
+            "description": "Create, list, or compare live project state against saved VOS snapshots.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["create", "list", "compare_live"], "description": "Operation mode (default: list)." },
+                    "project": { "type": "string", "description": "Project name (required for compare_live or single create)." },
+                    "all": { "type": "boolean", "description": "For action=create, snapshot all registered projects." },
+                    "label": { "type": "string", "description": "Optional label when creating a snapshot." },
+                    "from_id": { "type": "integer", "description": "Optional snapshot ID to compare against live state." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Max snapshots to list (default: 10)." }
+                },
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_doctor",
+            "description": "Check SQLite + FTS5 integrity, orphan objects, stale deleted relations, and missing project root paths.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "repair": { "type": "boolean", "description": "Repair FTS5 drift and clean stale state (default: false)." }
+                },
+                "additionalProperties": false
+            }
+        }),
     ]
 }
 
@@ -298,6 +395,48 @@ pub(crate) fn execute_tool(store: &mut Store, name: &str, args: &Value) -> Resul
             let quality = opt_u8(&args_obj, "quality")?;
             let session = store.stop_session(project, quality, note)?;
             Ok(serde_json::to_value(session)?)
+        }
+        "vos_init" => handle_init(store, &args_obj),
+        "vos_coverage" => {
+            let project = require_str(&args_obj, "project")?;
+            let experimental = opt_bool(&args_obj, "experimental")?.unwrap_or(true);
+            let coverage = store.project_coverage(project)?;
+            let doc_quality = if experimental {
+                Some(store.experimental_doc_quality(project)?)
+            } else {
+                None
+            };
+            Ok(json!({
+                "coverage": coverage,
+                "doc_quality": doc_quality
+            }))
+        }
+        "vos_evolution" => {
+            let project = require_str(&args_obj, "project")?;
+            let since_raw = opt_str(&args_obj, "since")?.unwrap_or("30d");
+            let since_ts = parse_since_arg(since_raw)?;
+            let evo = store.project_evolution(project, since_ts, since_raw)?;
+            Ok(serde_json::to_value(evo)?)
+        }
+        "vos_changed_since" => {
+            let since_raw = require_str(&args_obj, "since")?;
+            let since_ts = parse_since_arg(since_raw)?;
+            let project = opt_str(&args_obj, "project")?;
+            let report = store.changed_since(since_ts, since_raw, project)?;
+            Ok(serde_json::to_value(report)?)
+        }
+        "vos_related" => {
+            let target = require_str(&args_obj, "target")?;
+            let project = opt_str(&args_obj, "project")?;
+            let limit = opt_usize(&args_obj, "limit")?.unwrap_or(8).clamp(1, 30);
+            let hits = store.find_related(target, project, limit)?;
+            Ok(serde_json::to_value(hits)?)
+        }
+        "vos_snapshot" => handle_snapshot(store, &args_obj),
+        "vos_doctor" => {
+            let repair = opt_bool(&args_obj, "repair")?.unwrap_or(false);
+            let report = store.doctor(repair)?;
+            Ok(serde_json::to_value(report)?)
         }
         _ => Err(McpError::UnknownTool(name.to_string())),
     }
@@ -497,6 +636,81 @@ fn handle_index(store: &mut Store, args: &Value) -> Result<Value, McpError> {
         project,
         &report,
     ))?)
+}
+
+fn handle_init(store: &mut Store, args: &Value) -> Result<Value, McpError> {
+    let raw_path = opt_str(args, "path")?.unwrap_or(".");
+    let name = opt_str(args, "name")?;
+    let description = opt_str(args, "description")?;
+    let index = opt_bool(args, "index")?.unwrap_or(true);
+    let setup_mcp = opt_bool(args, "setup_mcp")?.unwrap_or(true);
+    let force = opt_bool(args, "force")?.unwrap_or(false);
+    let no_ignore = opt_bool(args, "no_ignore")?.unwrap_or(false);
+
+    let report = init_project(
+        store,
+        InitOptions {
+            path: Path::new(raw_path),
+            name,
+            description,
+            index,
+            no_ignore,
+            setup_mcp,
+            force,
+        },
+    )?;
+
+    Ok(json!({
+        "project": report.project,
+        "project_created": report.project_created,
+        "index_report": report.index_report.as_ref().map(|r| McpIndexReport::from_report(Some(report.project.name.clone()), r)),
+        "mcp_configs": report.mcp_configs,
+    }))
+}
+
+fn handle_snapshot(store: &Store, args: &Value) -> Result<Value, McpError> {
+    let action = opt_str(args, "action")?.unwrap_or("list");
+    let project = opt_str(args, "project")?;
+    let all = opt_bool(args, "all")?.unwrap_or(false);
+    let label = opt_str(args, "label")?;
+    let limit = opt_usize(args, "limit")?.unwrap_or(10).clamp(1, 50);
+
+    match action {
+        "create" => {
+            if all {
+                let snaps = store.save_all_snapshots(label)?;
+                Ok(serde_json::to_value(snaps)?)
+            } else if let Some(proj) = project {
+                let snap = store.save_snapshot(proj, label)?;
+                Ok(serde_json::to_value(snap)?)
+            } else {
+                Err(McpError::InvalidParams(
+                    "provide 'project' or set 'all': true for snapshot action=create".into(),
+                ))
+            }
+        }
+        "list" => {
+            let snaps = store.list_snapshots(project, limit)?;
+            Ok(serde_json::to_value(snaps)?)
+        }
+        "compare_live" => {
+            let proj = project.ok_or_else(|| {
+                McpError::InvalidParams("'project' is required for snapshot action=compare_live".into())
+            })?;
+            let from_id = match args.get("from_id") {
+                None | Some(Value::Null) => None,
+                Some(Value::Number(n)) => n.as_i64(),
+                Some(_) => {
+                    return Err(McpError::InvalidParams("'from_id' must be an integer".into()));
+                }
+            };
+            let diff = store.compare_snapshot_to_live(proj, from_id)?;
+            Ok(serde_json::to_value(diff)?)
+        }
+        other => Err(McpError::InvalidParams(format!(
+            "unknown snapshot action '{other}' (expected create|list|compare_live)"
+        ))),
+    }
 }
 
 fn require_str<'a>(obj: &'a Value, key: &str) -> Result<&'a str, McpError> {

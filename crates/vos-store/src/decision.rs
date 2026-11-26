@@ -150,6 +150,7 @@ impl Store {
             }
         }
 
+        let git = crate::git::inspect_git_context(resume.project.root_path.as_deref());
         Ok(ProjectStatus {
             project: resume.project,
             health,
@@ -166,6 +167,7 @@ impl Store {
             high_risk_count,
             critical_areas,
             dependency_hubs,
+            git,
             risk_areas,
         })
     }

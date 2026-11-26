@@ -218,7 +218,7 @@ impl Store {
             match rel_type {
                 RelationType::MdLink => entry.md_link_refs += 1,
                 RelationType::PathRef => entry.path_ref_refs += 1,
-                RelationType::RustMod | RelationType::RustUse => {}
+                RelationType::RustMod | RelationType::RustUse | RelationType::CodeImport => {}
             }
         }
 

@@ -951,6 +951,8 @@ name = "vos-indexer"
 version = "1.2.0-experimental"
 dependencies = [
  "ignore",
+ "serde",
+ "serde_json",
  "sha2",
  "tempfile",
  "thiserror",

@@ -1365,3 +1365,62 @@ fn cli_mcp_command_serves_json_rpc_over_stdio_and_exits_on_eof() {
     assert_eq!(responses[2]["result"]["isError"], false);
     assert_eq!(responses[3]["result"]["isError"], false);
 }
+#[test]
+fn cli_init_and_git_context_work_end_to_end() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("initgit");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("README.md"), "# InitGit\n").unwrap();
+    fs::write(proj.join("src/lib.rs"), "pub fn ready() {}\n").unwrap();
+
+    // Initialize a real git repository when git is present in PATH
+    let git_ok = Command::new("git")
+        .args(["init"])
+        .current_dir(&proj)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if git_ok {
+        let _ = Command::new("git")
+            .args(["config", "user.email", "vos@example.com"])
+            .current_dir(&proj)
+            .output();
+        let _ = Command::new("git")
+            .args(["config", "user.name", "VOS Test"])
+            .current_dir(&proj)
+            .output();
+        let _ = Command::new("git")
+            .args(["add", "."])
+            .current_dir(&proj)
+            .output();
+        let _ = Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&proj)
+            .output();
+    }
+
+    let init_json = assert_vos_ok(&db, &["init", proj.to_str().unwrap(), "--json"]);
+    let init_val: serde_json::Value = serde_json::from_str(&init_json).unwrap();
+    assert_eq!(init_val["project_created"], true);
+    assert_eq!(init_val["project"]["name"], "initgit");
+    assert!(proj.join(".mcp.json").exists());
+    assert!(proj.join(".vscode").join("mcp.json").exists());
+
+    // Running init a second time is idempotent
+    let init_second = assert_vos_ok(&db, &["init", proj.to_str().unwrap(), "--json"]);
+    let second_val: serde_json::Value = serde_json::from_str(&init_second).unwrap();
+    assert_eq!(second_val["project_created"], false);
+    assert_eq!(second_val["mcp_configs"][0]["status"], "unchanged");
+
+    if git_ok {
+        let st_compact = assert_vos_ok(&db, &["status", "initgit", "--json", "--compact"]);
+        let st_val: serde_json::Value = serde_json::from_str(&st_compact).unwrap();
+        assert_eq!(st_val["git"]["last_commit_subject"], "initial commit");
+        assert_eq!(st_val["git"]["is_dirty"], true); // .mcp.json untracked!
+
+        let cont_text = assert_vos_ok(&db, &["continue", "initgit"]);
+        assert!(cont_text.contains("Git:"));
+        assert!(cont_text.contains("initial commit"));
+    }
+}

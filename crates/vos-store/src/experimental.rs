@@ -449,6 +449,7 @@ mod tests {
                 critical_areas: Vec::new(),
                 dependency_hubs: Vec::new(),
                 risk_areas: Vec::new(),
+                git: None,
             },
             now,
         )

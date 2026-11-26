@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::models::{
     ActiveArea, AreaCoverage, AreaOwnership, AreaRisk, ContinueSuggestion, DocumentationHealth,
-    EventRecord, EventType, GraphDirection, GraphEdge, GraphHub, GraphTreeNode, HubImportance,
+    EventRecord, EventType, GitContext, GraphDirection, GraphEdge, GraphHub, GraphTreeNode, HubImportance,
     ObjectImpact, ObjectKind, ObjectRecord, ObjectWhy, ProjectContinue, ProjectGraph,
     ProjectHealth, ProjectStatus, QueryIntent, RecoveryPrediction, RelatedHit, RelationType,
     SearchHit, SearchSignal, WorkSession,
@@ -156,6 +156,8 @@ pub struct CompactContinue {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_session: Option<WorkSession>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitContext>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub recovery_prediction: Option<RecoveryPrediction>,
 }
 
@@ -210,6 +212,7 @@ impl CompactContinue {
                 .map(|h| CompactContinueHub::from_hub(h, root))
                 .collect(),
             last_session: cont.last_session.clone(),
+            git: cont.git.clone(),
             recovery_prediction,
         }
     }
@@ -236,6 +239,8 @@ pub struct CompactStatus {
     pub critical_areas: Vec<AreaRisk>,
     pub dependency_hubs: Vec<String>,
     pub risk_areas: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitContext>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recovery_prediction: Option<RecoveryPrediction>,
 }
@@ -268,6 +273,7 @@ impl CompactStatus {
             critical_areas: st.critical_areas.clone(),
             dependency_hubs: st.dependency_hubs.clone(),
             risk_areas: st.risk_areas.clone(),
+            git: st.git.clone(),
             recovery_prediction,
         }
     }
