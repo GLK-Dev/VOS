@@ -5,8 +5,8 @@
 
 ## 1. Vision & Scope
 
-**VOS (Vector Operating System)** is an ecosystem built on top of an existing host OS (Linux-first).
-Its immediate, verifiable product core is a **Project Memory System**: a fast local tool that helps a developer or researcher answer:
+**VOS (Velocity Orientation System)** is a local-first **Project Memory System** built on top of an existing host OS (Windows / Linux):
+a fast, deterministic tool that minimizes context-recovery time and helps a developer or AI agent answer:
 
 - What belongs to this project (code, notes, docs, models)?
 - What changed recently?

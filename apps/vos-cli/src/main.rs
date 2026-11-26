@@ -1,4 +1,4 @@
-//! Command-line interface for VOS (Project Memory System).
+//! Command-line interface for VOS (Velocity Orientation System).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -26,7 +26,7 @@ use vos_store::{SearchFilters, Store, load_benchmark_cases};
 #[command(
     name = "vos",
     version,
-    about = "VOS — Project Memory System (local index, FTS5 search, context recovery)"
+    about = "VOS — Velocity Orientation System (local index, FTS5 search, context recovery)"
 )]
 struct Cli {
     /// Path to the VOS SQLite database file (defaults to ~/.vos/vos.db).

@@ -1,4 +1,4 @@
-# VOS — Project Memory Platform
+# VOS — Velocity Orientation System
 
 VOS is a local-first **Project Memory System** built on SQLite + FTS5 + deterministic heuristics to help you recover project context, track evolution, detect drift, and decide what to do next.
 
