@@ -1327,3 +1327,92 @@ pub struct PreflightReport {
     pub affected_tests: Vec<AffectedTest>,
     pub suggested_commands: Vec<String>,
 }
+
+/// Single packed context block selected by the deterministic token-budgeted Context Compiler (`vos pack`).
+#[derive(Debug, Clone, Serialize)]
+pub struct PackedItem {
+    pub id: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    pub title: String,
+    pub content: String,
+    pub tokens: usize,
+    pub value: f64,
+    pub efficiency: f64,
+}
+
+/// Token-budgeted compiled context package returned by `vos pack`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextPack {
+    pub project_name: String,
+    pub goal: String,
+    pub token_budget: usize,
+    pub used_tokens: usize,
+    pub utilization_ratio: f64,
+    pub items_considered: usize,
+    pub items_selected: usize,
+    pub omitted_count: usize,
+    pub items: Vec<PackedItem>,
+    pub rendered_markdown: String,
+}
+
+/// Empirically calibrated multiplier weights for recovery difficulty prediction (`vos calibrate`).
+#[derive(Debug, Clone, Serialize)]
+pub struct CalibrationWeights {
+    pub inactivity_multiplier: f64,
+    pub coverage_multiplier: f64,
+    pub risk_multiplier: f64,
+    pub open_questions_multiplier: f64,
+    pub size_multiplier: f64,
+    pub dirty_git_bonus: usize,
+}
+
+/// Self-calibrating recovery telemetry report computed over completed `work_sessions`.
+#[derive(Debug, Clone, Serialize)]
+pub struct CalibrationReport {
+    pub total_scored_sessions: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_filter: Option<String>,
+    pub false_alarm_rate: f64,
+    pub missed_difficulty_rate: f64,
+    pub avg_duration_secs: f64,
+    pub avg_quality: f64,
+    pub weights: CalibrationWeights,
+    pub notes: Vec<String>,
+}
+
+/// Single project node in the local Constellation HUD portfolio (`vos ui`).
+#[derive(Debug, Clone, Serialize)]
+pub struct ConstellationNode {
+    pub project_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_path: Option<String>,
+    pub health: ProjectHealth,
+    pub active_objects: usize,
+    pub dirty_files: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    pub predicted_difficulty: RecoveryDifficulty,
+    pub risk_score: usize,
+    pub critical_risk_count: usize,
+    pub stale_facts_count: usize,
+    pub active_leases_count: usize,
+    pub open_questions_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<i64>,
+    pub top_areas: Vec<String>,
+}
+
+/// Multi-project Constellation portfolio snapshot returned by `vos ui --once` and `vos_constellation`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConstellationPortfolio {
+    pub generated_at: i64,
+    pub total_objects: usize,
+    pub total_dirty_files: usize,
+    pub total_stale_facts: usize,
+    pub projects: Vec<ConstellationNode>,
+    pub calibration: CalibrationReport,
+}

@@ -1,6 +1,5 @@
 use rusqlite::params;
 use std::collections::{HashMap, HashSet, VecDeque};
-use vos_core::util::now_unix;
 use vos_core::{
     DocQualityEntry, DocQualityReport, DocQualityTier, DocumentationHealth, GraphDirection,
     HubImportance, ObjectImpact, ProjectStatus, RecoveryDifficulty, RecoveryPrediction,
@@ -12,7 +11,7 @@ use crate::{Store, StoreError};
 impl Store {
     /// Predicts project re-entry difficulty (`Easy`, `Medium`, `Hard`) from existing status signals.
     pub fn predict_recovery_difficulty(&self, status: &ProjectStatus) -> RecoveryPrediction {
-        predict_from_status_at(status, now_unix())
+        self.predict_recovery_calibrated(status)
     }
 
     /// Computes normalized centrality (`hub_score` 0.0..=1.0) and structural role per connected node.

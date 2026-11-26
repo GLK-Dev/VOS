@@ -14,6 +14,9 @@ SQLite persistence, FTS5 search, project context recovery, dependency graph, and
 - [`src/decision.rs`](src/decision.rs) — `project_status`, `explain_concept`, and `changed_since`.
 - [`src/git.rs`](src/git.rs) — deterministic local Git branch, dirty counters, and last-commit inspection (`GitContext`).
 - [`src/graph.rs`](src/graph.rs)
+- [`src/packer.rs`](src/packer.rs) — deterministic value-per-token `compile_context_pack` (os pack).
+- [`src/calibration.rs`](src/calibration.rs) — empirical `calibrate_recovery` and `predict_recovery_calibrated` over `work_sessions`.
+- [`src/hud.rs`](src/hud.rs) — `constellation_portfolio` aggregation and ASCII Constellation Matrix.
 - [`src/guard.rs`](src/guard.rs) — pre-edit `preflight`, reverse-BFS `affected_tests`, and `vos.rules.toml` architectural `check_guard_rules`. — directed dependency traversal (`project_graph`, `object_relations`).
 - [`src/insight.rs`](src/insight.rs) — `project_ownership`, `project_coverage`, and `analyze_area_risks`.
 - [`src/evolution.rs`](src/evolution.rs) — `project_evolution`, `project_drift`, and `all_project_drifts`.

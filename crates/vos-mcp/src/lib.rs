@@ -339,6 +339,9 @@ mod tests {
             (18, "vos_recall", json!({ "query": "v1.4" })),
             (19, "vos_affected_tests", json!({ "project": "fullmcp", "targets": ["src/lib.rs"] })),
             (20, "vos_preflight", json!({ "project": "fullmcp", "targets": ["src/lib.rs"] })),
+            (21, "vos_pack", json!({ "project": "fullmcp", "goal": "v", "budget": 1000 })),
+            (22, "vos_calibrate", json!({ "project": "fullmcp" })),
+            (23, "vos_constellation", json!({})),
         ] {
             let req = json!({
                 "jsonrpc": "2.0", "id": id, "method": "tools/call",

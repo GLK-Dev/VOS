@@ -93,7 +93,7 @@ Turn VOS from passive memory into an active engineering safety shield executed l
 
 ---
 
-## v2.0 — Adaptive Context Compiler & Constellation HUD
+## v2.0 — Adaptive Context Compiler & Constellation HUD (`Implemented on experimental`)
 
 ### 1. Token-Budgeted Context Compiler (`vos pack "<goal>" --budget <tokens>`)
 - Instead of guessing which 4–5 commands to run or dumping truncated files, solve a deterministic **Knapsack / Value-per-Token** packing pass over:

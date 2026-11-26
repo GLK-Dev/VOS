@@ -1,6 +1,7 @@
 //! SQLite persistence, FTS5 search, and project context queries for VOS.
 
 mod archaeology;
+mod calibration;
 mod batch;
 mod benchmark;
 mod cognitive;
@@ -11,6 +12,8 @@ mod experimental;
 mod git;
 mod graph;
 mod guard;
+mod hud;
+mod packer;
 mod insight;
 mod queries;
 mod recovery;
@@ -33,6 +36,8 @@ pub use benchmark::load_benchmark_cases;
 pub use cognitive::HandoffInput;
 pub use graph::ActiveObjectRef;
 pub use guard::{GuardRule, parse_vos_rules_toml};
+pub use hud::render_constellation_ascii;
+pub use packer::estimate_tokens;
 pub use search::SearchFilters;
 pub use workflow::format_recovery_log_row;
 

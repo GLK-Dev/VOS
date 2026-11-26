@@ -1640,3 +1640,47 @@ fn cli_preflight_guard_and_affected_tests_work_end_to_end() {
     assert_eq!(fail_val["passed"], false);
     assert_eq!(fail_val["violations"][0]["rule"], "cli-no-sqlite");
 }
+
+
+#[test]
+fn cli_pack_calibrate_and_ui_once_work_end_to_end() {
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("vos.db");
+    let proj = dir.path().join("packproj");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(
+        proj.join("src/engine.rs"),
+        "pub fn compile_plan(tokens: usize) -> usize {\n    tokens\n}\n",
+    )
+    .unwrap();
+    fs::write(proj.join("README.md"), "# PackProj\nUses `src/engine.rs`.\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "packproj", proj.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "packproj"]);
+    assert_vos_ok(
+        &db,
+        &["fact", "add", "compile_plan strictly honors budget", "--project", "packproj", "--file", "src/engine.rs"],
+    );
+
+    let pack_json = assert_vos_ok(
+        &db,
+        &["pack", "packproj", "compile_plan budget", "--budget", "1200", "--json"],
+    );
+    let pack_val: serde_json::Value = serde_json::from_str(&pack_json).unwrap();
+    assert!(pack_val["used_tokens"].as_u64().unwrap() <= 1200);
+    assert!(pack_val["rendered_markdown"]
+        .as_str()
+        .unwrap()
+        .contains("compile_plan"));
+
+    assert_vos_ok(&db, &["session", "start", "packproj", "--note", "v2 check"]);
+    assert_vos_ok(&db, &["session", "stop", "packproj", "--quality", "5", "--note", "fast"]);
+
+    let cal_json = assert_vos_ok(&db, &["calibrate", "packproj", "--json"]);
+    let cal_val: serde_json::Value = serde_json::from_str(&cal_json).unwrap();
+    assert_eq!(cal_val["total_scored_sessions"], 1);
+
+    let ui_json = assert_vos_ok(&db, &["ui", "--once", "--json"]);
+    let ui_val: serde_json::Value = serde_json::from_str(&ui_json).unwrap();
+    assert_eq!(ui_val["projects"][0]["project_name"], "packproj");
+}

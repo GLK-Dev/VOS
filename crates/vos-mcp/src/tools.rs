@@ -513,6 +513,42 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                 "additionalProperties": false
             }
         }),
+        json!({
+            "name": "vos_pack",
+            "description": "Compile a deterministic value-per-token context pack strictly within `budget` tokens over session state, facts, AST symbol slices, search matches, and graph neighbors.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string" },
+                    "goal": { "type": "string" },
+                    "budget": { "type": "integer", "minimum": 128, "maximum": 128000 }
+                },
+                "required": ["project", "goal"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_calibrate",
+            "description": "Compute empirical recovery prediction weights and false-alarm / missed-difficulty metrics from completed work_sessions.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string" }
+                },
+                "required": [],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_constellation",
+            "description": "Return a multi-project Constellation HUD portfolio snapshot showing pulse, dirty Git state, recovery difficulty, stale facts, and active leases.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+            }
+        }),
     ]
 }
 
@@ -752,6 +788,19 @@ pub(crate) fn execute_tool(store: &mut Store, name: &str, args: &Value) -> Resul
             let project = require_str(&args_obj, "project")?;
             let targets = opt_str_array(&args_obj, "targets")?;
             Ok(serde_json::to_value(store.preflight(project, &targets)?)?)
+        }
+        "vos_pack" => {
+            let project = require_str(&args_obj, "project")?;
+            let goal = require_str(&args_obj, "goal")?;
+            let budget = opt_usize(&args_obj, "budget")?.unwrap_or(4000).clamp(128, 128_000);
+            Ok(serde_json::to_value(store.compile_context_pack(project, goal, budget)?)?)
+        }
+        "vos_calibrate" => {
+            let project = opt_str(&args_obj, "project")?;
+            Ok(serde_json::to_value(store.calibrate_recovery(project)?)?)
+        }
+        "vos_constellation" => {
+            Ok(serde_json::to_value(store.constellation_portfolio()?)?)
         }
         _ => Err(McpError::UnknownTool(name.to_string())),
     }

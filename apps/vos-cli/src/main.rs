@@ -1,5 +1,7 @@
 //! Command-line interface for VOS (Velocity Orientation System).
 
+mod ui;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,7 +22,7 @@ fn is_compact_json() -> bool {
     COMPACT_JSON.load(Ordering::Relaxed)
 }
 use vos_indexer::{IndexOptions, InitOptions, WatchOptions, index_path_with_options, init_project, watch_path_with_options};
-use vos_store::{HandoffInput, SearchFilters, Store, load_benchmark_cases};
+use vos_store::{HandoffInput, SearchFilters, Store, load_benchmark_cases, render_constellation_ascii};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -153,6 +155,36 @@ enum Commands {
         /// Max hits across sources.
         #[arg(long, default_value_t = 15)]
         limit: usize,
+    },
+    /// Compile a deterministic value-per-token context bundle strictly within `--budget` tokens.
+    Pack {
+        /// Registered project name.
+        project: String,
+        /// Target task or engineering goal to optimize context for.
+        goal: String,
+        /// Strict maximum token budget (128..128000).
+        #[arg(long, default_value_t = 4000)]
+        budget: usize,
+        /// Output only compiled Markdown prompt (ideal for piping into LLMs or clipboards).
+        #[arg(long)]
+        raw: bool,
+    },
+    /// Inspect empirical recovery prediction weights and error rates from completed sessions.
+    Calibrate {
+        /// Optional registered project name (omit for global workspace calibration).
+        project: Option<String>,
+    },
+    /// Launch the on-demand single-binary local Constellation HUD (or print snapshot with --once).
+    Ui {
+        /// Port to bind on 127.0.0.1 (0 picks an available ephemeral port).
+        #[arg(long, default_value_t = 4173)]
+        port: u16,
+        /// Do not attempt to auto-open a browser window.
+        #[arg(long)]
+        no_open: bool,
+        /// Render the portfolio Constellation snapshot once and exit immediately.
+        #[arg(long)]
+        once: bool,
     },
     /// Check declarative architectural guardrails (`vos.rules.toml`) for a project.
     Guard {
@@ -819,6 +851,76 @@ fn execute_cli(cli: Cli) -> Result<()> {
                     );
                     println!("   {}", hit.excerpt);
                 }
+            }
+        }
+        Commands::Pack {
+            project,
+            goal,
+            budget,
+            raw,
+        } => {
+            let pack = store.compile_context_pack(&project, &goal, budget)?;
+            if json {
+                return print_json(&pack);
+            }
+            if raw {
+                print!("{}", pack.rendered_markdown);
+            } else {
+                println!(
+                    "Context Pack `{}` | {}/{} tokens ({:.1}%) | {} item(s) packed ({} omitted)",
+                    pack.project_name,
+                    pack.used_tokens,
+                    pack.token_budget,
+                    pack.utilization_ratio * 100.0,
+                    pack.items_selected,
+                    pack.omitted_count
+                );
+                println!("{}", pack.rendered_markdown);
+            }
+        }
+        Commands::Calibrate { project } => {
+            let report = store.calibrate_recovery(project.as_deref())?;
+            if json {
+                return print_json(&report);
+            }
+            println!(
+                "Recovery Calibration ({}): {} scored session(s) | avg_dur: {:.1}s | avg_quality: {:.2}/5.0",
+                report.project_filter.as_deref().unwrap_or("global"),
+                report.total_scored_sessions,
+                report.avg_duration_secs,
+                report.avg_quality
+            );
+            println!(
+                "  False alarms: {:.0}% | Missed difficulty: {:.0}%",
+                report.false_alarm_rate * 100.0,
+                report.missed_difficulty_rate * 100.0
+            );
+            println!(
+                "  Weights: inact={:.2}x cov={:.2}x risk={:.2}x q={:.2}x size={:.2}x dirty=+{}",
+                report.weights.inactivity_multiplier,
+                report.weights.coverage_multiplier,
+                report.weights.risk_multiplier,
+                report.weights.open_questions_multiplier,
+                report.weights.size_multiplier,
+                report.weights.dirty_git_bonus
+            );
+            for note in &report.notes {
+                println!("  - {note}");
+            }
+        }
+        Commands::Ui {
+            port,
+            no_open,
+            once,
+        } => {
+            if once {
+                let portfolio = store.constellation_portfolio()?;
+                if json {
+                    return print_json(&portfolio);
+                }
+                print!("{}", render_constellation_ascii(&portfolio));
+            } else {
+                ui::run_constellation_server(&mut store, port, !no_open)?;
             }
         }
         Commands::Guard {

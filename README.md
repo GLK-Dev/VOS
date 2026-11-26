@@ -13,7 +13,7 @@ See [SPEC.md](SPEC.md) for the technical specification, [ROADMAP.md](ROADMAP.md)
 ### Validation Summary
 
 - `10` real projects indexed (`780+` active objects, `1690+` deterministic relations)
-- `111 / 111` workspace tests passing (`0` clippy warnings under `-D warnings`)
+- `116 / 116` workspace tests passing (`0` clippy warnings under `-D warnings`)
 - `30 / 30` live sprint recovery scenarios passing (`~110ms` median CLI latency)
 - `24 / 24` isolated multi-project session lifecycle checks passing (`active=0`)
 
@@ -59,6 +59,9 @@ vos drift --all
 vos changed-since 2026-11-01 my-app
 
 # Dependency Graph, Ownership & Coverage
+vos pack my-app "implement feature" --budget 2000 --raw
+vos calibrate
+vos ui --once
 vos preflight my-app crates/core/src/lib.rs
 vos affected-tests my-app crates/core/src/lib.rs
 vos guard my-app --strict
@@ -127,7 +130,7 @@ VOS provides a stateless stdio **Model Context Protocol (MCP)** server (`vos mcp
 }
 ```
 
-**Exposed MCP tools (32):** `vos_init`, `vos_list_projects`, `vos_continue`, `vos_status`, `vos_search`, `vos_show`, `vos_why`, `vos_preflight`, `vos_affected_tests`, `vos_guard`, `vos_archaeology`, `vos_slice`, `vos_symbols`, `vos_fact`, `vos_claim`, `vos_release`, `vos_handoff`, `vos_recall`, `vos_graph`, `vos_drift`, `vos_coverage`, `vos_evolution`, `vos_changed_since`, `vos_related`, `vos_snapshot`, `vos_tags`, `vos_tag`, `vos_untag`, `vos_index`, `vos_session_start`, `vos_session_stop`, `vos_doctor`.
+**Exposed MCP tools (35):** `vos_init`, `vos_list_projects`, `vos_continue`, `vos_status`, `vos_search`, `vos_show`, `vos_why`, `vos_pack`, `vos_calibrate`, `vos_constellation`, `vos_preflight`, `vos_affected_tests`, `vos_guard`, `vos_archaeology`, `vos_slice`, `vos_symbols`, `vos_fact`, `vos_claim`, `vos_release`, `vos_handoff`, `vos_recall`, `vos_graph`, `vos_drift`, `vos_coverage`, `vos_evolution`, `vos_changed_since`, `vos_related`, `vos_snapshot`, `vos_tags`, `vos_tag`, `vos_untag`, `vos_index`, `vos_session_start`, `vos_session_stop`, `vos_doctor`.
 
 ### Compact CLI Mode
 
