@@ -324,6 +324,9 @@ mod tests {
             (8, "vos_tag", json!({ "target": "src/lib.rs", "project": "fullmcp", "tags": ["core"] })),
             (9, "vos_tags", json!({ "project": "fullmcp" })),
             (10, "vos_untag", json!({ "target": "src/lib.rs", "project": "fullmcp", "tags": ["core"] })),
+            (11, "vos_symbols", json!({ "file": "src/lib.rs", "project": "fullmcp" })), 
+            (12, "vos_slice", json!({ "target": "src/lib.rs", "project": "fullmcp", "symbol": "v" })), 
+            (13, "vos_archaeology", json!({ "target": "src/lib.rs", "project": "fullmcp" })),
         ] {
             let req = json!({
                 "jsonrpc": "2.0", "id": id, "method": "tools/call",

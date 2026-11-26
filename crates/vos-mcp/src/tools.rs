@@ -349,6 +349,50 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                 "additionalProperties": false
             }
         }),
+        json!({
+            "name": "vos_archaeology",
+            "description": "Inspect Git commits, temporal co-change partners (hidden coupling), doc references, and work sessions for a file.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": { "type": "string", "description": "Object ID, title, or relative/suffix file path." },
+                    "project": { "type": "string", "description": "Optional project scope." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Max commits and co-change partners (default: 10)." }
+                },
+                "required": ["target"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_slice",
+            "description": "Read a targeted symbol or line-range slice of a file (with line numbers), or list the file's symbol outline in minimal tokens.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": { "type": "string", "description": "Object ID, title, or relative/suffix file path." },
+                    "project": { "type": "string", "description": "Optional project scope." },
+                    "symbol": { "type": "string", "description": "Symbol name to extract cleanly by exact line span." },
+                    "start_line": { "type": "integer", "minimum": 1, "description": "Optional 1-based start line." },
+                    "end_line": { "type": "integer", "minimum": 1, "description": "Optional 1-based end line." }
+                },
+                "required": ["target"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_symbols",
+            "description": "Search code functions/structs/traits/headings across indexed files via symbols_fts, or list symbols in one file.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "FTS5 symbol name/signature query." },
+                    "file": { "type": "string", "description": "Target file to list all symbols for." },
+                    "project": { "type": "string", "description": "Optional project filter." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Max hits (default: 25)." }
+                },
+                "additionalProperties": false
+            }
+        }),
     ]
 }
 
@@ -496,6 +540,35 @@ pub(crate) fn execute_tool(store: &mut Store, name: &str, args: &Value) -> Resul
             let tags = require_str_array(&args_obj, "tags")?;
             let obj = store.remove_tags_scoped(target, project, &tags)?;
             Ok(serde_json::to_value(obj)?)
+        }
+        "vos_archaeology" => {
+            let target = require_str(&args_obj, "target")?;
+            let project = opt_str(&args_obj, "project")?;
+            let limit = opt_usize(&args_obj, "limit")?.unwrap_or(10).clamp(1, 50);
+            let rep = store.project_archaeology(target, project, limit)?;
+            Ok(serde_json::to_value(rep)?)
+        }
+        "vos_slice" => {
+            let target = require_str(&args_obj, "target")?;
+            let project = opt_str(&args_obj, "project")?;
+            let symbol = opt_str(&args_obj, "symbol")?;
+            let start_line = opt_usize(&args_obj, "start_line")?;
+            let end_line = opt_usize(&args_obj, "end_line")?;
+            let slice = store.slice_object(target, project, symbol, start_line, end_line)?;
+            Ok(serde_json::to_value(slice)?)
+        }
+        "vos_symbols" => {
+            let project = opt_str(&args_obj, "project")?;
+            let limit = opt_usize(&args_obj, "limit")?.unwrap_or(25).clamp(1, 100);
+            if let Some(file) = opt_str(&args_obj, "file")? {
+                let syms = store.list_file_symbols(file, project)?;
+                Ok(serde_json::to_value(syms)?)
+            } else if let Some(query) = opt_str(&args_obj, "query")? {
+                let syms = store.search_symbols(query, project, limit)?;
+                Ok(serde_json::to_value(syms)?)
+            } else {
+                Err(McpError::InvalidParams("provide 'query' or 'file'".into()))
+            }
         }
         _ => Err(McpError::UnknownTool(name.to_string())),
     }

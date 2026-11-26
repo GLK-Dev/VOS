@@ -1425,3 +1425,78 @@ fn cli_init_and_git_context_work_end_to_end() {
         assert!(cont_text.contains("initial commit"));
     }
 }
+#[test]
+fn cli_archaeology_symbols_and_slice_work_end_to_end() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("archproj");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("README.md"), "# ArchProj\n\n## Design\nNote\n").unwrap();
+    fs::write(
+        proj.join("src/lib.rs"),
+        "pub struct Engine {\n    n: usize,\n}\n\nimpl Engine {\n    pub fn run_cycle(&self) -> usize {\n        self.n + 42\n    }\n}\n",
+    )
+    .unwrap();
+    fs::write(proj.join("src/partner.rs"), "pub fn paired() {}\n").unwrap();
+
+    let git_ok = Command::new("git")
+        .args(["init"])
+        .current_dir(&proj)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if git_ok {
+        let _ = Command::new("git")
+            .args(["config", "user.email", "vos@example.com"])
+            .current_dir(&proj)
+            .output();
+        let _ = Command::new("git")
+            .args(["config", "user.name", "VOS Test"])
+            .current_dir(&proj)
+            .output();
+        let _ = Command::new("git")
+            .args(["add", "."])
+            .current_dir(&proj)
+            .output();
+        let _ = Command::new("git")
+            .args(["commit", "-m", "feat: add engine and paired module"])
+            .current_dir(&proj)
+            .output();
+    }
+
+    assert_vos_ok(&db, &["init", proj.to_str().unwrap(), "--no-mcp"]);
+
+    let sym_json = assert_vos_ok(&db, &["symbols", "run_cycle", "--project", "archproj", "--json"]);
+    let syms: Vec<serde_json::Value> = serde_json::from_str(&sym_json).unwrap();
+    assert_eq!(syms[0]["name"], "run_cycle");
+    assert_eq!(syms[0]["start_line"], 6);
+    assert_eq!(syms[0]["end_line"], 8);
+
+    let slice_json = assert_vos_ok(
+        &db,
+        &[
+            "slice",
+            "src/lib.rs",
+            "--project",
+            "archproj",
+            "--symbol",
+            "run_cycle",
+            "--json",
+        ],
+    );
+    let slice_val: serde_json::Value = serde_json::from_str(&slice_json).unwrap();
+    assert_eq!(slice_val["matched_symbol"], "run_cycle");
+    assert!(slice_val["content"].as_str().unwrap().contains("self.n + 42"));
+    assert!(!slice_val["content"].as_str().unwrap().contains("pub struct Engine"));
+
+    if git_ok {
+        let arch_json = assert_vos_ok(
+            &db,
+            &["archaeology", "src/lib.rs", "--project", "archproj", "--json"],
+        );
+        let arch_val: serde_json::Value = serde_json::from_str(&arch_json).unwrap();
+        assert_eq!(arch_val["commits"][0]["subject"], "feat: add engine and paired module");
+        let partners = arch_val["co_change_partners"].as_array().unwrap();
+        assert!(partners.iter().any(|p| p["path"] == "src/partner.rs" && p["has_static_relation"] == false));
+    }
+}

@@ -53,6 +53,45 @@ struct Cli {
 enum Commands {
     /// Run a stateless JSON-RPC 2.0 MCP server over stdin/stdout (exits on EOF).
     Mcp,
+    /// Inspect causal Git history, temporal co-change partners, doc refs, and sessions for a file.
+    Archaeology {
+        /// Object ID, title, or relative/suffix file path.
+        target: String,
+        /// Optional project scope.
+        #[arg(long)]
+        project: Option<String>,
+        /// Max commits / co-change partners to display.
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
+    /// Extract an exact symbol or line range from an indexed file, or print its symbol outline.
+    Slice {
+        /// Object ID, title, or relative/suffix file path.
+        target: String,
+        /// Optional project scope.
+        #[arg(long)]
+        project: Option<String>,
+        /// Symbol name (function, struct, trait, impl, class, or Markdown heading) to slice.
+        #[arg(long)]
+        symbol: Option<String>,
+        /// Line range in START:END or START-END format (e.g. 10:50).
+        #[arg(long)]
+        lines: Option<String>,
+    },
+    /// Search indexed code/doc symbols via FTS5 or list all symbols in a file.
+    Symbols {
+        /// Full-text symbol name/signature query (omit when using --file).
+        query: Option<String>,
+        /// List all symbols inside one target file.
+        #[arg(long)]
+        file: Option<String>,
+        /// Optional project scope.
+        #[arg(long)]
+        project: Option<String>,
+        /// Max symbols to return.
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+    },
     /// Register a directory as a VOS project, index it, and configure MCP clients.
     Init {
         /// Project directory path (defaults to current working directory).
@@ -570,6 +609,140 @@ fn execute_cli(cli: Cli) -> Result<()> {
     let json = cli.json;
     match cli.command {
         Commands::Mcp => vos_mcp::serve_stdio(&mut store)?,
+        Commands::Archaeology {
+            target,
+            project,
+            limit,
+        } => {
+            let report = store.project_archaeology(&target, project.as_deref(), limit)?;
+            if json {
+                return print_json(&report);
+            }
+            println!(
+                "Archaeology: {} ({})",
+                report.path,
+                report.project_name.as_deref().unwrap_or("-")
+            );
+            println!("\nCommits ({} sampled):", report.total_commits_sampled);
+            if report.commits.is_empty() {
+                println!("  (none)");
+            } else {
+                for c in &report.commits {
+                    println!(
+                        "  - {} {} ({}) — {}",
+                        c.hash,
+                        format_day(c.timestamp),
+                        c.author,
+                        c.subject
+                    );
+                }
+            }
+            println!("\nTemporal co-change partners:");
+            if report.co_change_partners.is_empty() {
+                println!("  (none)");
+            } else {
+                for p in &report.co_change_partners {
+                    let link_state = if p.has_static_relation {
+                        "static-linked"
+                    } else {
+                        "HIDDEN COUPLING"
+                    };
+                    println!(
+                        "  - {} [{}] ({}/{} commits, {:.0}% | {})",
+                        p.path,
+                        p.kind,
+                        p.co_commits,
+                        p.target_commits,
+                        p.coupling_ratio * 100.0,
+                        link_state
+                    );
+                }
+            }
+            if !report.doc_references.is_empty() {
+                println!("\nReferenced in docs:");
+                for d in &report.doc_references {
+                    println!("  - {d}");
+                }
+            }
+            if !report.related_sessions.is_empty() {
+                println!("\nRelated work sessions:");
+                for s in &report.related_sessions {
+                    println!(
+                        "  - {} | note: {}",
+                        s.id,
+                        s.stop_note.as_deref().or(s.start_note.as_deref()).unwrap_or("-")
+                    );
+                }
+            }
+        }
+        Commands::Slice {
+            target,
+            project,
+            symbol,
+            lines,
+        } => {
+            let (start_line, end_line) = parse_line_range_arg(lines.as_deref())?;
+            let slice = store.slice_object(
+                &target,
+                project.as_deref(),
+                symbol.as_deref(),
+                start_line,
+                end_line,
+            )?;
+            if json {
+                return print_json(&slice);
+            }
+            println!(
+                "Slice: {} ({} lines | range: {}..={}{})",
+                slice.path,
+                slice.total_lines,
+                slice.start_line,
+                slice.end_line,
+                slice
+                    .matched_symbol
+                    .as_deref()
+                    .map(|s| format!(" | symbol: {s}"))
+                    .unwrap_or_default()
+            );
+            if let Some(ref content) = slice.content {
+                println!("\n{content}");
+            } else {
+                println!("\nSymbols ({}):", slice.symbols.len());
+                for sym in &slice.symbols {
+                    println!(
+                        "  {:>4}..={:<4} [{}] {} — {}",
+                        sym.start_line, sym.end_line, sym.kind, sym.name, sym.signature
+                    );
+                }
+            }
+        }
+        Commands::Symbols {
+            query,
+            file,
+            project,
+            limit,
+        } => {
+            let syms = if let Some(ref target_file) = file {
+                store.list_file_symbols(target_file, project.as_deref())?
+            } else if let Some(ref q) = query {
+                store.search_symbols(q, project.as_deref(), limit)?
+            } else {
+                return Err(anyhow::anyhow!("provide a symbol <QUERY> or --file <TARGET>"));
+            };
+            if json {
+                return print_json(&syms);
+            }
+            if syms.is_empty() {
+                println!("No matching symbols found.");
+            } else {
+                for sym in &syms {
+                    println!(
+                        "{}:{}-{} [{}] {} — {}",
+                        sym.path, sym.start_line, sym.end_line, sym.kind, sym.name, sym.signature
+                    );
+                }
+            }
+        }
         Commands::Watch {
             target,
             project,
@@ -2823,6 +2996,34 @@ fn pct(passed: usize, total: usize) -> f64 {
         0.0
     } else {
         (passed as f64 / total as f64) * 100.0
+    }
+}
+
+fn parse_line_range_arg(raw: Option<&str>) -> Result<(Option<usize>, Option<usize>)> {
+    let Some(spec) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok((None, None));
+    };
+    let sep = if spec.contains(':') { ':' } else { '-' };
+    if let Some((a, b)) = spec.split_once(sep) {
+        let start = a
+            .trim()
+            .parse::<usize>()
+            .with_context(|| format!("invalid start line in '{spec}'"))?;
+        let end = if b.trim().is_empty() {
+            None
+        } else {
+            Some(
+                b.trim()
+                    .parse::<usize>()
+                    .with_context(|| format!("invalid end line in '{spec}'"))?,
+            )
+        };
+        Ok((Some(start), end))
+    } else {
+        let single = spec
+            .parse::<usize>()
+            .with_context(|| format!("invalid line number '{spec}'"))?;
+        Ok((Some(single), Some(single)))
     }
 }
 

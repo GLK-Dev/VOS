@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use rusqlite::{OptionalExtension, Transaction, params};
 use tracing::debug;
 use vos_core::util::{is_path_within, new_id};
-use vos_core::{EventType, ObjectKind, RelationType};
+use vos_core::{EventType, ObjectKind, RelationType, SymbolInput};
 
 use crate::StoreError;
 
@@ -239,6 +239,11 @@ impl<'conn> IndexBatch<'conn> {
                     .prepare_cached("DELETE FROM relations WHERE from_id = ?1 OR to_id = ?1")?;
                 del_rel.execute(params![obj_id])?;
 
+                let mut del_sym = self
+                    .tx
+                    .prepare_cached("DELETE FROM symbols WHERE object_id = ?1")?;
+                del_sym.execute(params![obj_id])?;
+
                 insert_event(
                     &self.tx,
                     obj_project_id.as_deref(),
@@ -292,6 +297,54 @@ impl<'conn> IndexBatch<'conn> {
         }
 
         Ok(inserted)
+    }
+
+    /// Idempotently synchronizes structural symbols for `object_id`.
+    pub fn sync_symbols(
+        &mut self,
+        object_id: &str,
+        symbols: &[SymbolInput],
+        force_replace: bool,
+    ) -> Result<usize, StoreError> {
+        if !force_replace {
+            let existing: i64 = {
+                let mut cnt = self
+                    .tx
+                    .prepare_cached("SELECT COUNT(*) FROM symbols WHERE object_id = ?1")?;
+                cnt.query_row(params![object_id], |row| row.get(0))?
+            };
+            if existing > 0 || symbols.is_empty() {
+                return Ok(0);
+            }
+        }
+
+        {
+            let mut del = self
+                .tx
+                .prepare_cached("DELETE FROM symbols WHERE object_id = ?1")?;
+            del.execute(params![object_id])?;
+        }
+
+        if symbols.is_empty() {
+            return Ok(0);
+        }
+
+        let mut ins = self.tx.prepare_cached(
+            "INSERT INTO symbols (id, object_id, name, kind, signature, start_line, end_line)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )?;
+        for sym in symbols {
+            ins.execute(params![
+                new_id("sym"),
+                object_id,
+                sym.name,
+                sym.kind.as_str(),
+                sym.signature,
+                sym.start_line as i64,
+                sym.end_line as i64,
+            ])?;
+        }
+        Ok(symbols.len())
     }
 
     /// Commits all indexed object updates, chunk replacements, and events atomically.

@@ -294,6 +294,39 @@ pub struct GitContext {
     pub last_commit_at: Option<i64>,
 }
 
+/// Single Git commit entry touching a target file (`vos archaeology`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CommitTouch {
+    pub hash: String,
+    pub timestamp: i64,
+    pub author: String,
+    pub subject: String,
+}
+
+/// Another active project file frequently committed alongside the target (`co_change`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CoChangePartner {
+    pub path: String,
+    pub kind: ObjectKind,
+    pub co_commits: usize,
+    pub target_commits: usize,
+    pub coupling_ratio: f64,
+    pub has_static_relation: bool,
+}
+
+/// Causal Git + doc + session archaeology report for a target object (`vos archaeology`).
+#[derive(Debug, Clone, Serialize)]
+pub struct ArchaeologyReport {
+    pub path: String,
+    pub title: String,
+    pub project_name: Option<String>,
+    pub total_commits_sampled: usize,
+    pub commits: Vec<CommitTouch>,
+    pub co_change_partners: Vec<CoChangePartner>,
+    pub doc_references: Vec<String>,
+    pub related_sessions: Vec<WorkSession>,
+}
+
 /// Explainable context report returned by `vos why <target>`.
 #[derive(Debug, Clone, Serialize)]
 pub struct ObjectWhy {
@@ -1031,4 +1064,99 @@ pub struct DoctorReport {
     pub missing_project_roots: Vec<String>,
     pub repaired: bool,
     pub healthy: bool,
+}
+
+/// Structural symbol category extracted without language daemons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub enum SymbolKind {
+    Fn,
+    Struct,
+    Enum,
+    Trait,
+    Impl,
+    Mod,
+    Class,
+    Type,
+    Const,
+    Heading,
+}
+
+impl SymbolKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Fn => "fn",
+            Self::Struct => "struct",
+            Self::Enum => "enum",
+            Self::Trait => "trait",
+            Self::Impl => "impl",
+            Self::Mod => "mod",
+            Self::Class => "class",
+            Self::Type => "type",
+            Self::Const => "const",
+            Self::Heading => "heading",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "fn" => Self::Fn,
+            "struct" => Self::Struct,
+            "enum" => Self::Enum,
+            "trait" => Self::Trait,
+            "impl" => Self::Impl,
+            "mod" => Self::Mod,
+            "class" => Self::Class,
+            "type" => Self::Type,
+            "const" => Self::Const,
+            _ => Self::Heading,
+        }
+    }
+}
+
+impl fmt::Display for SymbolKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Extracted symbol input passed from indexer to store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymbolInput {
+    pub name: String,
+    pub kind: SymbolKind,
+    pub signature: String,
+    pub start_line: usize,
+    pub end_line: usize,
+}
+
+/// Persisted symbol row returned by symbol search and slice queries.
+#[derive(Debug, Clone, Serialize)]
+pub struct SymbolRecord {
+    pub id: String,
+    pub object_id: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
+    pub name: String,
+    pub kind: SymbolKind,
+    pub signature: String,
+    pub start_line: usize,
+    pub end_line: usize,
+}
+
+/// Targeted line/symbol slice or outline returned by `vos slice`.
+#[derive(Debug, Clone, Serialize)]
+pub struct FileSlice {
+    pub path: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
+    pub total_lines: usize,
+    pub start_line: usize,
+    pub end_line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_symbol: Option<String>,
+    pub symbols: Vec<SymbolRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
 }

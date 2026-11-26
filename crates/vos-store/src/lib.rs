@@ -1,5 +1,6 @@
 //! SQLite persistence, FTS5 search, and project context queries for VOS.
 
+mod archaeology;
 mod batch;
 mod benchmark;
 mod concepts;
@@ -12,6 +13,7 @@ mod insight;
 mod queries;
 mod recovery;
 mod search;
+mod symbols;
 mod workflow;
 
 use std::collections::HashSet;
@@ -50,6 +52,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
     (
         "0005_snapshots_and_sessions",
         include_str!("../../../migrations/0005_snapshots_and_sessions.sql"),
+    ),
+    (
+        "0006_symbols",
+        include_str!("../../../migrations/0006_symbols.sql"),
     ),
 ];
 
@@ -474,7 +480,9 @@ impl Store {
                 [],
             )?;
             tx.execute("INSERT INTO objects_fts(objects_fts) VALUES('rebuild')", [])?;
+            tx.execute("DELETE FROM symbols WHERE object_id IN (SELECT id FROM objects WHERE is_deleted = 1)", [])?;
             tx.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')", [])?;
+            tx.execute("INSERT INTO symbols_fts(symbols_fts) VALUES('rebuild')", [])?;
             tx.commit()?;
             repaired = true;
         }

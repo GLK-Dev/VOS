@@ -3,6 +3,7 @@
 mod lang_refs;
 mod relations;
 mod setup;
+mod symbols;
 mod watch;
 
 pub use setup::{InitOptions, InitReport, McpConfigStatus, init_project};
@@ -24,6 +25,8 @@ use vos_core::util::{
 use vos_store::{ActiveObjectRef, Store, StoreError, UpsertObjectInput, UpsertOutcome};
 
 use relations::{RawRef, ScannedObjectRefs, extract_refs, resolve_relations};
+use symbols::extract_symbols;
+use vos_core::SymbolInput;
 
 const MAX_TEXT_BYTES: u64 = 2 * 1024 * 1024;
 const CHUNK_CHAR_LIMIT: usize = 1000;
@@ -139,6 +142,7 @@ pub fn index_path_with_options(
     let mut seen_paths = HashSet::new();
     let mut inputs = Vec::new();
     let mut raw_refs_by_path: Vec<(String, Vec<RawRef>)> = Vec::new();
+    let mut symbols_by_path: HashMap<String, Vec<SymbolInput>> = HashMap::new();
 
     for entry_result in walk_project_files(&canonical_root, options.no_ignore) {
         let entry = match entry_result {
@@ -201,21 +205,23 @@ pub fn index_path_with_options(
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| canonical_file.clone());
 
-        let (summary, chunks, extracted_refs) =
+        let (summary, chunks, extracted_refs, extracted_syms) =
             if !is_noise && kind.is_text_indexable() && size_bytes <= MAX_TEXT_BYTES {
                 match read_utf8_text(path) {
                     Some(text) => {
                         let sum = extract_summary(&text);
                         let ch = chunk_text(&text, CHUNK_CHAR_LIMIT);
                         let refs = extract_refs(path, kind, &text);
-                        (sum, ch, refs)
+                        let syms = extract_symbols(path, kind, &text);
+                        (sum, ch, refs, syms)
                     }
-                    None => (None, Vec::new(), Vec::new()),
+                    None => (None, Vec::new(), Vec::new(), Vec::new()),
                 }
             } else {
-                (None, Vec::new(), Vec::new())
+                (None, Vec::new(), Vec::new(), Vec::new())
             };
         raw_refs_by_path.push((canonical_file.clone(), extracted_refs));
+        symbols_by_path.insert(canonical_file.clone(), extracted_syms);
 
         let project_id = match explicit_project_id {
             Some(ref pid) => Some(pid.clone()),
@@ -271,6 +277,10 @@ pub fn index_path_with_options(
 
         let outcome = batch.upsert_object(input)?;
         let object_id = outcome.object_id().to_string();
+        let force_sym = !matches!(outcome, UpsertOutcome::Unchanged(_));
+        if let Some(syms) = symbols_by_path.get(&path) {
+            batch.sync_symbols(&object_id, syms, force_sym)?;
+        }
         match outcome {
             UpsertOutcome::Added(_) => report.added += 1,
             UpsertOutcome::Modified(_) => report.modified += 1,

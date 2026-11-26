@@ -40,7 +40,7 @@ v1.2 (Validation) ──▶ v1.3 (Causal Archaeology & AST) ──▶ v1.4 (Mult
 
 ---
 
-## v1.3 — Decision Archaeology & Symbol-Level Precision
+## v1.3 — Decision Archaeology & Symbol-Level Precision (`Implemented`)
 
 Move from file-level memory to **symbol-level precision + causal "why was this code written?" memory** without running heavyweight LSP daemons.
 

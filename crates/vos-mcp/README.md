@@ -30,5 +30,8 @@ Stateless stdio **Model Context Protocol (MCP)** server crate for VOS (Velocity 
 - `vos_tags`
 - `vos_tag`
 - `vos_untag`
+- `vos_archaeology`
+- `vos_slice`
+- `vos_symbols`
 
 Launch via `vos mcp` (optionally with `--db <path>` or `VOS_DB`).

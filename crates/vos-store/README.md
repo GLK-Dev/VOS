@@ -4,6 +4,8 @@ SQLite persistence, FTS5 search, project context recovery, dependency graph, and
 
 ## Module Map
 
+- [`src/archaeology.rs`](src/archaeology.rs) — Git commit archaeology and temporal co-change partner detection.
+- [`src/symbols.rs`](src/symbols.rs) — `symbols_fts` queries, file outlines, and `slice_object`.
 - [`src/lib.rs`](src/lib.rs) — `Store` connection lifecycle, migrations, project CRUD, tags, and [`doctor`](src/lib.rs) integrity repair.
 - [`src/batch.rs`](src/batch.rs) — transactional `IndexBatch` upserts, soft-deletes, and `sync_relations`.
 - [`src/queries.rs`](src/queries.rs) — `show_object_scoped`, `project_context`, and `project_timeline`.
