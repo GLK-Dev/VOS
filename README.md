@@ -3,14 +3,17 @@
 </p>
 <h1 align="center">VOS — Velocity Orientation System</h1>
 <p align="center">
-  <a href="https://glk-dev.github.io/VOS/"><strong>Live Website &amp; Interactive Wiki</strong></a> ·
-  <a href="https://glk-dev.github.io/VOS/wiki.html#mcp-reference"><strong>35 MCP Tools</strong></a> ·
-  <a href="CHANGELOG.md"><strong>Changelog (v2.0.0)</strong></a> ·
-  <a href="SPEC.md"><strong>Spec</strong></a> ·
-  <a href="LICENSE.md"><strong>GUIL-1.0</strong></a>
+  <a href="https://glk-dev.github.io/VOS/"><img src="https://img.shields.io/badge/Website-glk--dev.github.io%2FVOS-38bdf8?style=for-the-badge" alt="VOS Website"/></a>
+  <a href="https://glk-dev.github.io/VOS/wiki.html"><img src="https://img.shields.io/badge/Docs-Interactive_Wiki-34d399?style=for-the-badge" alt="VOS Interactive Wiki"/></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/Release-v2.0.0-f59e0b?style=for-the-badge" alt="VOS v2.0.0"/></a>
+  <a href="LICENSE.md"><img src="https://img.shields.io/badge/License-GUIL--1.0-8b9bb4?style=for-the-badge" alt="GUIL-1.0"/></a>
 </p>
 <p align="center">
-  <img src="website/assets/vos-banner.jpg" alt="VOS Constellation Banner" width="860"/>
+  <strong>Official Website:</strong> <a href="https://glk-dev.github.io/VOS/">https://glk-dev.github.io/VOS/</a> &nbsp;|&nbsp;
+  <strong>Wiki:</strong> <a href="https://glk-dev.github.io/VOS/wiki.html">https://glk-dev.github.io/VOS/wiki.html</a>
+</p>
+<p align="center">
+  <a href="https://glk-dev.github.io/VOS/"><img src="website/assets/vos-banner.jpg" alt="VOS Constellation Banner" width="860"/></a>
 </p>
 
 VOS is a local-first **Project Memory System** built on SQLite + FTS5 + deterministic heuristics to help you recover project context, track evolution, detect drift, and decide what to do next.
@@ -19,7 +22,9 @@ See [CHANGELOG.md](CHANGELOG.md) for release notes, [SPEC.md](SPEC.md) for the t
 
 ## Project Status
 
-**Version:** VOS 2.0.0 (`main`)
+**Website & Interactive Wiki:** https://glk-dev.github.io/VOS/ ([Wiki](https://glk-dev.github.io/VOS/wiki.html))
+
+**Version:** VOS 2.0.0 (main)
 
 **Status:** Production Release (`v2.0.0` graduated from `experimental/recovery-predictor` with Context Compiler, Self-Calibrating Recovery, Guardrails, Cognitive Bus, Archaeology, MCP 35 tools, and Constellation HUD)
 
