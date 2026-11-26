@@ -2,19 +2,19 @@
 
 VOS is a local-first **Project Memory System** built on SQLite + FTS5 + deterministic heuristics to help you recover project context, track evolution, detect drift, and decide what to do next.
 
-See [SPEC.md](SPEC.md) for the technical specification, [ROADMAP.md](ROADMAP.md) for the v1.2–v2.0 innovation roadmap, [AGENTS.md](AGENTS.md) for engineering rules, and the workspace crates ([models.rs](crates/vos-core/src/models.rs), [lib.rs](crates/vos-store/src/lib.rs), [indexer](crates/vos-indexer/src/lib.rs), [vos-mcp](crates/vos-mcp/src/lib.rs), [main.rs](apps/vos-cli/src/main.rs)) for implementation details.
+See [CHANGELOG.md](CHANGELOG.md) for release notes, [SPEC.md](SPEC.md) for the technical specification, [ROADMAP.md](ROADMAP.md) for the v1.2–v2.0 innovation roadmap, [AGENTS.md](AGENTS.md) for engineering rules, and the workspace crates ([models.rs](crates/vos-core/src/models.rs), [lib.rs](crates/vos-store/src/lib.rs), [indexer](crates/vos-indexer/src/lib.rs), [vos-mcp](crates/vos-mcp/src/lib.rs), [main.rs](apps/vos-cli/src/main.rs)) for implementation details.
 
 ## Project Status
 
-**Version:** VOS 1.2.0-experimental (`experimental/recovery-predictor`)
+**Version:** VOS 2.0.0 (`main`)
 
-**Status:** Validation Active (closed-loop recovery measurement active via `vos session` + `sprint_session.ps1`; `main` remains frozen at `VOS 1.1.2`)
+**Status:** Production Release (`v2.0.0` graduated from `experimental/recovery-predictor` with Context Compiler, Self-Calibrating Recovery, Guardrails, Cognitive Bus, Archaeology, MCP 35 tools, and Constellation HUD)
 
 ### Validation Summary
 
-- `10` real projects indexed (`780+` active objects, `1690+` deterministic relations)
+- `11` real projects indexed (`1470+` active objects, `2290+` deterministic relations)
 - `116 / 116` workspace tests passing (`0` clippy warnings under `-D warnings`)
-- `30 / 30` live sprint recovery scenarios passing (`~110ms` median CLI latency)
+- `30 / 30` live sprint recovery scenarios passing (`~77ms` median CLI latency)
 - `24 / 24` isolated multi-project session lifecycle checks passing (`active=0`)
 
 ### Search Benchmark (`tests/search_live.yaml`)

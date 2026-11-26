@@ -3,7 +3,7 @@
 > **VOS — Velocity Orientation System**
 > Local-first deterministic project memory, causal archaeology, multi-agent coordination, and token-budgeted context compilation built in Rust + SQLite + FTS5.
 
-Current baseline: **`v1.2.0-experimental`** (`experimental/recovery-predictor`, `main` frozen at `1.1.2`).
+Current baseline: **`v2.0.0`** (graduated from `experimental/recovery-predictor` into `main`).
 Engineering rule across every milestone: deterministic SQLite/Rust logic first, zero mandatory background daemons, explainable signals only, and measurable improvements in **Context Recovery Time**, **Recovery Quality**, and **Agent Token Efficiency**.
 
 ---
@@ -30,7 +30,7 @@ v1.2 (Validation) ──▶ v1.3 (Causal Archaeology & AST) ──▶ v1.4 (Mult
 
 ---
 
-## v1.2 — Validation & Release Gate (`Current -> main`)
+## v1.2 — Validation & Agent Native Layer (`Released in v2.0.0`)
 
 - [x] **AI-Agent Native Layer:** `vos mcp` stateless stdio server (21 tools), `--compact` projections (~97% JSON size reduction on large repos), structured `{"error": "..."}` JSON output.
 - [x] **One-Command Onboarding:** `vos init` (project registration + idempotent indexing + safe `.mcp.json` & `.vscode/mcp.json` scaffolding).
@@ -71,7 +71,7 @@ Solve the real failure modes that appear when multiple AI assistants (`Claude Co
 
 ---
 
-## v1.5 — Pre-Flight Blast Simulator & Architectural Guardrails (`Implemented on experimental`)
+## v1.5 — Pre-Flight Blast Simulator & Architectural Guardrails (`Released in v2.0.0`)
 
 Turn VOS from passive memory into an active engineering safety shield executed locally in `<50ms`.
 
@@ -93,7 +93,7 @@ Turn VOS from passive memory into an active engineering safety shield executed l
 
 ---
 
-## v2.0 — Adaptive Context Compiler & Constellation HUD (`Implemented on experimental`)
+## v2.0 — Adaptive Context Compiler & Constellation HUD (`Released in v2.0.0`)
 
 ### 1. Token-Budgeted Context Compiler (`vos pack "<goal>" --budget <tokens>`)
 - Instead of guessing which 4–5 commands to run or dumping truncated files, solve a deterministic **Knapsack / Value-per-Token** packing pass over:

@@ -920,7 +920,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vos-cli"
-version = "1.2.0-experimental"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -938,7 +938,7 @@ dependencies = [
 
 [[package]]
 name = "vos-core"
-version = "1.2.0-experimental"
+version = "2.0.0"
 dependencies = [
  "serde",
  "sha2",
@@ -948,7 +948,7 @@ dependencies = [
 
 [[package]]
 name = "vos-indexer"
-version = "1.2.0-experimental"
+version = "2.0.0"
 dependencies = [
  "ignore",
  "serde",
@@ -963,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "vos-mcp"
-version = "1.2.0-experimental"
+version = "2.0.0"
 dependencies = [
  "chrono",
  "serde",
@@ -977,7 +977,7 @@ dependencies = [
 
 [[package]]
 name = "vos-store"
-version = "1.2.0-experimental"
+version = "2.0.0"
 dependencies = [
  "rusqlite",
  "serde",
