@@ -2,7 +2,7 @@
 
 VOS is a local-first **Project Memory System** built on SQLite + FTS5 + deterministic heuristics to help you recover project context, track evolution, detect drift, and decide what to do next.
 
-See [SPEC.md](SPEC.md) for the canonical v0.1 specification, [AGENTS.md](AGENTS.md) for engineering rules, and the workspace crates ([models.rs](crates/vos-core/src/models.rs), [lib.rs](crates/vos-store/src/lib.rs), [indexer](crates/vos-indexer/src/lib.rs), [vos-mcp](crates/vos-mcp/src/lib.rs), [main.rs](apps/vos-cli/src/main.rs)) for implementation details.
+See [SPEC.md](SPEC.md) for the technical specification, [ROADMAP.md](ROADMAP.md) for the v1.2–v2.0 innovation roadmap, [AGENTS.md](AGENTS.md) for engineering rules, and the workspace crates ([models.rs](crates/vos-core/src/models.rs), [lib.rs](crates/vos-store/src/lib.rs), [indexer](crates/vos-indexer/src/lib.rs), [vos-mcp](crates/vos-mcp/src/lib.rs), [main.rs](apps/vos-cli/src/main.rs)) for implementation details.
 
 ## Project Status
 
