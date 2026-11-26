@@ -2,13 +2,23 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Local, NaiveDate, TimeZone};
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
+use vos_core::compact::{
+    CompactContinue, CompactGraph, CompactSearchHit, CompactStatus, CompactWhy,
+};
 use vos_core::util::now_unix;
 use vos_core::{GraphDirection, GraphTreeNode, ObjectKind};
+
+static COMPACT_JSON: AtomicBool = AtomicBool::new(false);
+
+fn is_compact_json() -> bool {
+    COMPACT_JSON.load(Ordering::Relaxed)
+}
 use vos_indexer::{IndexOptions, index_path_with_options};
 use vos_store::{SearchFilters, Store, load_benchmark_cases};
 
@@ -31,12 +41,18 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
+    /// Emit minimal single-line JSON (omits whitespace, nested trees, and verbose blobs).
+    #[arg(long, global = true)]
+    compact: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Run a stateless JSON-RPC 2.0 MCP server over stdin/stdout (exits on EOF).
+    Mcp,
     /// Manage projects.
     Project {
         #[command(subcommand)]
@@ -490,15 +506,33 @@ fn main() -> Result<()> {
 
 fn run() -> Result<()> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
 
     let cli = Cli::parse();
+    COMPACT_JSON.store(cli.compact, Ordering::Relaxed);
+    let json_errors = cli.json && !matches!(cli.command, Commands::Mcp);
+    if let Err(err) = execute_cli(cli) {
+        if json_errors {
+            let payload = serde_json::json!({ "error": format!("{err:#}") });
+            let _ = eprint_json(&payload);
+            std::process::exit(1);
+        }
+        return Err(err);
+    }
+    Ok(())
+}
+
+fn execute_cli(cli: Cli) -> Result<()> {
     let db_path = cli.db.unwrap_or_else(default_db_path);
     let mut store = Store::open(&db_path)?;
 
     let experimental = cli.experimental;
     let json = cli.json;
     match cli.command {
+        Commands::Mcp => vos_mcp::serve_stdio(&mut store)?,
         Commands::Project { action } => handle_project(&mut store, action, json)?,
         Commands::Index {
             path,
@@ -881,6 +915,13 @@ fn run() -> Result<()> {
             if all {
                 let rows = collect_all_statuses(&store, experimental)?;
                 if json {
+                    if is_compact_json() {
+                        let payload: Vec<CompactStatus> = rows
+                            .iter()
+                            .map(|(st, pred)| CompactStatus::from_status(st, pred.clone()))
+                            .collect();
+                        return print_json(&payload);
+                    }
                     let payload: Vec<JsonStatusWithExperimental<'_>> = rows
                         .iter()
                         .map(|(st, pred)| JsonStatusWithExperimental {
@@ -902,6 +943,9 @@ fn run() -> Result<()> {
                 None
             };
             if json {
+                if is_compact_json() {
+                    return print_json(&CompactStatus::from_status(&st, prediction));
+                }
                 return print_json(&JsonStatusWithExperimental {
                     status: &st,
                     recovery_prediction: prediction,
@@ -1099,10 +1143,10 @@ fn run() -> Result<()> {
                 None
             };
             if json {
-                return print_json(&JsonContinueWithExperimental {
-                    cont: &cont,
-                    recovery_prediction: prediction,
-                });
+                if is_compact_json() {
+                    return print_json(&CompactContinue::from_continue(&cont, prediction));
+                }
+                return print_json(&JsonContinueReport::from_continue(&cont, prediction));
             }
             let res = &cont.resume;
             let root_prefix = res.project.root_path.as_deref().unwrap_or("");
@@ -1309,6 +1353,9 @@ fn run() -> Result<()> {
                 None
             };
             if json {
+                if is_compact_json() {
+                    return print_json(&CompactWhy::from_why(&why, 12, impact));
+                }
                 return print_json(&JsonWhyWithExperimental {
                     why: &why,
                     experimental_impact: impact,
@@ -1426,6 +1473,9 @@ fn run() -> Result<()> {
                 None
             };
             if json {
+                if is_compact_json() {
+                    return print_json(&CompactGraph::from_graph(&graph, hub_importance));
+                }
                 return print_json(&JsonGraphWithExperimental {
                     graph: &graph,
                     hub_importance,
@@ -1931,6 +1981,13 @@ fn handle_search(
         },
     )?;
     if json {
+        if is_compact_json() {
+            let compact_hits: Vec<CompactSearchHit> = hits
+                .iter()
+                .map(|h| CompactSearchHit::from_hit(h, None, explain))
+                .collect();
+            return print_json(&compact_hits);
+        }
         return print_json(&hits);
     }
     if hits.is_empty() {
@@ -2742,7 +2799,20 @@ fn render_graph_tree(nodes: &[GraphTreeNode], root_prefix: &str, prefix: &str, i
 }
 
 fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(value)?);
+    if is_compact_json() {
+        println!("{}", serde_json::to_string(value)?);
+    } else {
+        println!("{}", serde_json::to_string_pretty(value)?);
+    }
+    Ok(())
+}
+
+fn eprint_json<T: serde::Serialize>(value: &T) -> Result<()> {
+    if is_compact_json() {
+        eprintln!("{}", serde_json::to_string(value)?);
+    } else {
+        eprintln!("{}", serde_json::to_string_pretty(value)?);
+    }
     Ok(())
 }
 
@@ -2808,11 +2878,52 @@ struct JsonStartWithExperimental<'a> {
 }
 
 #[derive(serde::Serialize)]
-struct JsonContinueWithExperimental<'a> {
-    #[serde(flatten)]
-    cont: &'a vos_core::ProjectContinue,
+struct JsonContinueHub<'a> {
+    object: &'a vos_core::ObjectRecord,
+    outgoing_count: usize,
+    incoming_count: usize,
+}
+
+#[derive(serde::Serialize)]
+struct JsonContinueReport<'a> {
+    resume: &'a vos_core::ProjectResume,
+    continue_from: &'a [vos_core::ContinueSuggestion],
+    recent_events: &'a [vos_core::EventRecord],
+    open_questions: &'a [String],
+    ownership_areas: &'a [vos_core::AreaOwnership],
+    coverage_warnings: &'a [vos_core::AreaCoverage],
+    dependency_hubs: Vec<JsonContinueHub<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_session: Option<&'a vos_core::WorkSession>,
     #[serde(skip_serializing_if = "Option::is_none")]
     recovery_prediction: Option<vos_core::RecoveryPrediction>,
+}
+
+impl<'a> JsonContinueReport<'a> {
+    fn from_continue(
+        cont: &'a vos_core::ProjectContinue,
+        recovery_prediction: Option<vos_core::RecoveryPrediction>,
+    ) -> Self {
+        Self {
+            resume: &cont.resume,
+            continue_from: &cont.continue_from,
+            recent_events: &cont.recent_events,
+            open_questions: &cont.open_questions,
+            ownership_areas: &cont.ownership_areas,
+            coverage_warnings: &cont.coverage_warnings,
+            dependency_hubs: cont
+                .dependency_hubs
+                .iter()
+                .map(|hub| JsonContinueHub {
+                    object: &hub.object,
+                    outgoing_count: hub.outgoing_count,
+                    incoming_count: hub.incoming_count,
+                })
+                .collect(),
+            last_session: cont.last_session.as_ref(),
+            recovery_prediction,
+        }
+    }
 }
 
 fn print_recovery_prediction(pred: &vos_core::RecoveryPrediction) {

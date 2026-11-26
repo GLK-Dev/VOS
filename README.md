@@ -13,7 +13,7 @@ See [SPEC.md](SPEC.md) for the canonical v0.1 specification, [AGENTS.md](AGENTS.
 ### Validation Summary
 
 - `10` real projects indexed (`780+` active objects, `1690+` deterministic relations)
-- `86 / 86` workspace tests passing (`0` clippy warnings under `-D warnings`)
+- `92 / 92` workspace tests passing (`0` clippy warnings under `-D warnings`)
 - `30 / 30` live sprint recovery scenarios passing (`~110ms` median CLI latency)
 - `24 / 24` isolated multi-project session lifecycle checks passing (`active=0`)
 
@@ -87,4 +87,48 @@ vos explain "project context"
 vos benchmark search --config tests/search_live.yaml --save --min-top5 90 --min-mrr 0.75
 vos benchmark history
 vos doctor
+```
+
+## AI Agent Integration (MCP & Compact JSON)
+
+VOS provides a stateless stdio **Model Context Protocol (MCP)** server (`vos mcp`, exits cleanly on EOF with zero background daemons) plus a global `--compact` flag for minimal-token CLI JSON (`vos ... --json --compact`). Errors under `--json` emit structured `{"error": "..."}` JSON to `stderr`.
+
+### MCP Server Setup
+
+**Claude Code / Claude Desktop / Gemini CLI / Antigravity** (`mcpServers`):
+
+```json
+{
+  "mcpServers": {
+    "vos": {
+      "command": "vos",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+**VS Code / GitHub Copilot Agent Mode** (`.vscode/mcp.json`):
+
+```json
+{
+  "servers": {
+    "vos": {
+      "type": "stdio",
+      "command": "vos",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+**Exposed MCP tools:** `vos_list_projects`, `vos_continue`, `vos_status`, `vos_search`, `vos_show`, `vos_why`, `vos_graph`, `vos_drift`, `vos_index`, `vos_session_start`, `vos_session_stop`.
+
+### Compact CLI Mode
+
+```bash
+vos continue my-app --experimental --json --compact
+vos status my-app --experimental --json --compact
+vos search "scheduler" --project my-app --json --compact
+vos why src/lib.rs --project my-app --experimental --json --compact
 ```

@@ -932,6 +932,7 @@ dependencies = [
  "tracing-subscriber",
  "vos-core",
  "vos-indexer",
+ "vos-mcp",
  "vos-store",
 ]
 
@@ -955,6 +956,20 @@ dependencies = [
  "thiserror",
  "tracing",
  "vos-core",
+ "vos-store",
+]
+
+[[package]]
+name = "vos-mcp"
+version = "1.2.0-experimental"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "vos-core",
+ "vos-indexer",
  "vos-store",
 ]
 

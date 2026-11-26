@@ -1245,3 +1245,123 @@ fn cli_start_experimental_includes_recovery_prediction() {
     assert!(exp_json["recovery_prediction"]["difficulty"].is_string());
     assert!(exp_json["recovery_prediction"]["score"].is_number());
 }
+
+#[test]
+fn cli_json_errors_and_compact_flag_work_end_to_end() {
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("cmpproj");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("README.md"), "# Compact\nSee `src/lib.rs` and `src/util.rs`.\n").unwrap();
+    fs::write(proj.join("src/util.rs"), "pub fn helper() {}\n").unwrap();
+    fs::write(
+        proj.join("src/lib.rs"),
+        "mod util;\npub fn entry() { util::helper(); }\n",
+    )
+    .unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "cmpproj", proj.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", "--all"]);
+
+    // Structured JSON error on failure when --json is passed
+    let (ok, stdout, stderr) = run_vos(&db, &["status", "missing-proj", "--json", "--compact"]);
+    assert!(!ok);
+    assert!(stdout.trim().is_empty());
+    assert_eq!(stderr.trim().lines().count(), 1);
+    let err_json: serde_json::Value = serde_json::from_str(&stderr).unwrap();
+    assert!(err_json["error"]
+        .as_str()
+        .unwrap()
+        .contains("project not found"));
+
+    // Standard continue --json omits heavy nested outgoing/incoming hub trees
+    let std_cont = assert_vos_ok(&db, &["continue", "cmpproj", "--experimental", "--json"]);
+    let std_val: serde_json::Value = serde_json::from_str(&std_cont).unwrap();
+    let hubs = std_val["dependency_hubs"].as_array().unwrap();
+    assert!(!hubs.is_empty());
+    assert!(hubs[0].get("outgoing").is_none());
+    assert!(hubs[0].get("incoming").is_none());
+
+    // Compact continue & why emit single-line JSON with relative paths
+    let cmp_cont = assert_vos_ok(
+        &db,
+        &["continue", "cmpproj", "--experimental", "--json", "--compact"],
+    );
+    assert_eq!(cmp_cont.trim().lines().count(), 1);
+    let cmp_val: serde_json::Value = serde_json::from_str(&cmp_cont).unwrap();
+    assert_eq!(cmp_val["resume"]["project"], "cmpproj");
+    assert!(cmp_cont.len() < std_cont.len());
+
+    let cmp_why = assert_vos_ok(
+        &db,
+        &[
+            "why",
+            "src/lib.rs",
+            "--project",
+            "cmpproj",
+            "--experimental",
+            "--json",
+            "--compact",
+        ],
+    );
+    assert_eq!(cmp_why.trim().lines().count(), 1);
+    let why_val: serde_json::Value = serde_json::from_str(&cmp_why).unwrap();
+    assert_eq!(why_val["object"]["path"], "src/lib.rs");
+    assert!(why_val["outgoing_total"].is_u64());
+}
+
+#[test]
+fn cli_mcp_command_serves_json_rpc_over_stdio_and_exits_on_eof() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let tmp = TempDir::new().unwrap();
+    let db = tmp.path().join("vos.db");
+    let proj = tmp.path().join("mcpproj");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("README.md"), "# MCP Project\n").unwrap();
+    fs::write(proj.join("src/lib.rs"), "pub fn mcp_ready() {}\n").unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "mcpproj", proj.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", "--all"]);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_vos"))
+        .arg("--db")
+        .arg(&db)
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        let reqs = [
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}"#,
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vos_continue","arguments":{"project":"mcpproj"}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"vos_search","arguments":{"query":"mcp_ready","project":"mcpproj"}}}"#,
+        ]
+        .join("\n");
+        stdin.write_all(reqs.as_bytes()).unwrap();
+        stdin.write_all(b"\n").unwrap();
+    }
+
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "vos mcp failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let responses: Vec<serde_json::Value> = stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(responses.len(), 4);
+    assert_eq!(responses[0]["result"]["serverInfo"]["name"], "vos");
+    assert_eq!(responses[2]["result"]["isError"], false);
+    assert_eq!(responses[3]["result"]["isError"], false);
+}

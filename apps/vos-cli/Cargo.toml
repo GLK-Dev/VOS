@@ -18,6 +18,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 vos-core.workspace = true
 vos-indexer.workspace = true
+vos-mcp.workspace = true
 vos-store.workspace = true
 
 [dev-dependencies]

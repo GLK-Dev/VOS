@@ -4,6 +4,7 @@ members = [
     "crates/vos-core",
     "crates/vos-store",
     "crates/vos-indexer",
+    "crates/vos-mcp",
     "apps/vos-cli",
 ]
 
@@ -28,6 +29,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.11", features = ["v4"] }
 vos-core = { path = "crates/vos-core" }
 vos-indexer = { path = "crates/vos-indexer" }
+vos-mcp = { path = "crates/vos-mcp" }
 vos-store = { path = "crates/vos-store" }
 ignore = "0.4"
 
