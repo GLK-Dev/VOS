@@ -7,11 +7,11 @@ pub mod util;
 
 pub use error::VosError;
 pub use models::{
-    ActiveArea, AgentHandoff, ArchaeologyReport, AreaLease, AreaCoverage, CoChangePartner, CommitTouch, AreaOwnership, AreaRisk, BenchmarkRunRecord, CategoryBenchmarkStats,
+    ActiveArea, AffectedTest, AffectedTestsReport, AgentHandoff, ArchaeologyReport, AreaLease, AreaCoverage, CoChangePartner, CommitTouch, AreaOwnership, AreaRisk, BenchmarkRunRecord, CategoryBenchmarkStats,
     ChangedSinceReport, ConceptExplanation, ContinueSuggestion, CoverageTier, DifficultyStats,
     DocQualityEntry, DocQualityReport, DocQualityTier, DoctorReport, DocumentationHealth,
-    DriftFinding, EventRecord, EventType, FactStatus, FileSlice, GitContext, GraphDirection, GraphEdge, GraphHub, GraphTreeNode,
-    HubImportance, ObjectDetails, ObjectImpact, ObjectKind, ObjectRecord, ObjectWhy, Project,
+    DriftFinding, EventRecord, EventType, FactStatus, FileSlice, GitContext, GraphDirection, GraphEdge, GraphHub, GraphTreeNode, GuardReport, GuardViolation,
+    HubImportance, ObjectDetails, ObjectImpact, PreflightReport, ObjectKind, ObjectRecord, ObjectWhy, Project,
     ProjectActivity, ProjectContext, ProjectContinue, ProjectCoverage, ProjectDrift,
     ProjectEvolution, ProjectFact, ProjectGraph, ProjectHealth, ProjectOwnership, ProjectResume,
     ProjectSnapshot, ProjectStart, ProjectStatus, ProjectSummary, QueryIntent, RecoveryDifficulty,

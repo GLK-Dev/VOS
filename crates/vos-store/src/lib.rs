@@ -10,6 +10,7 @@ mod evolution;
 mod experimental;
 mod git;
 mod graph;
+mod guard;
 mod insight;
 mod queries;
 mod recovery;
@@ -31,6 +32,7 @@ pub use batch::{IndexBatch, RelationInput, UpsertObjectInput, UpsertOutcome};
 pub use benchmark::load_benchmark_cases;
 pub use cognitive::HandoffInput;
 pub use graph::ActiveObjectRef;
+pub use guard::{GuardRule, parse_vos_rules_toml};
 pub use search::SearchFilters;
 pub use workflow::format_recovery_log_row;
 

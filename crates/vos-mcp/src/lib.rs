@@ -305,6 +305,11 @@ mod tests {
         fs::create_dir_all(proj.join("src")).unwrap();
         fs::write(proj.join("README.md"), "# FullMCP\nSee `src/lib.rs`.\n").unwrap();
         fs::write(proj.join("src/lib.rs"), "pub fn v() {}\n").unwrap();
+        fs::write(
+            proj.join("vos.rules.toml"),
+            "[[rule]]\nname = \"pure\"\nfrom = \"src\"\nforbid_import = \"rusqlite\"\n",
+        )
+        .unwrap();
 
         let mut store = Store::open_in_memory().unwrap();
         let init_req = json!({
@@ -332,6 +337,8 @@ mod tests {
             (16, "vos_handoff", json!({ "project": "fullmcp", "from": "mcp-1", "summary": "verified v1.4 recall" })), 
             (17, "vos_release", json!({ "project": "fullmcp" })), 
             (18, "vos_recall", json!({ "query": "v1.4" })),
+            (19, "vos_affected_tests", json!({ "project": "fullmcp", "targets": ["src/lib.rs"] })),
+            (20, "vos_preflight", json!({ "project": "fullmcp", "targets": ["src/lib.rs"] })),
         ] {
             let req = json!({
                 "jsonrpc": "2.0", "id": id, "method": "tools/call",
@@ -340,5 +347,17 @@ mod tests {
             let resp = handle_request(&mut store, &req).unwrap();
             assert_eq!(resp["result"]["isError"], false, "tool {tool} failed: {resp}");
         }
+
+        let guard_req = json!({
+            "jsonrpc": "2.0", "id": 21, "method": "tools/call",
+            "params": { "name": "vos_guard", "arguments": { "project": "fullmcp" } }
+        });
+        let guard_resp = handle_request(&mut store, &guard_req).unwrap();
+        assert_eq!(guard_resp["result"]["isError"], false);
+        let guard_payload: Value = serde_json::from_str(
+            guard_resp["result"]["content"][0]["text"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(guard_payload["passed"], true);
     }
 }

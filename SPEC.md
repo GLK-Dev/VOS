@@ -161,6 +161,6 @@ Global flag: `--db <path>` (or `VOS_DB` env var, defaulting to `~/.vos/vos.db`).
 Beyond the canonical v0.1 baseline above, VOS 1.2 includes the following additive migrations, commands, and agent integrations:
 
 - **Migrations:** `0001_init.sql`, `0002_noise.sql`, `0003_benchmark_history.sql`, `0004_relations.sql`, `0005_snapshots_and_sessions.sql`, `0006_symbols.sql`, `0007_cognitive_bus.sql`.
-- **Insight, Snapshot & Workflow Commands:** `vos init`, `vos watch`, `vos archaeology`, `vos slice`, `vos symbols`, `vos fact`, `vos claim`, `vos release`, `vos handoff`, `vos recall`, `vos graph`, `vos ownership`, `vos coverage`, `vos snapshot [--all]`, `vos compare-snapshot`, `vos drift [--all]`, `vos session start|stop|list|stats`.
+- **Insight, Snapshot & Workflow Commands:** `vos init`, `vos watch`, `vos archaeology`, `vos slice`, `vos symbols`, `vos fact`, `vos claim`, `vos release`, `vos handoff`, `vos recall`, `vos preflight`, `vos affected-tests`, `vos guard`, `vos graph`, `vos ownership`, `vos coverage`, `vos snapshot [--all]`, `vos compare-snapshot`, `vos drift [--all]`, `vos session start|stop|list|stats`.
 - **Git Recovery Context:** `vos status` and `vos continue` attach deterministic `GitContext` (current branch, dirty counters, last commit hash/subject/timestamp) when a project root resides in a Git repository.
 - **Agent Optimization & MCP:** global `--compact` single-line projected JSON, structured `{"error": "..."}` output on `stderr` under `--json`, and `vos mcp` (stateless newline-delimited JSON-RPC 2.0 server in `crates/vos-mcp`).

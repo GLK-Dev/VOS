@@ -1567,3 +1567,76 @@ fn cli_cognitive_bus_facts_leases_handoffs_and_recall_work_end_to_end() {
     let recall_arr: Vec<serde_json::Value> = serde_json::from_str(&recall_json).unwrap();
     assert!(recall_arr.iter().any(|r| r["source"] == "handoff"));
 }
+
+#[test]
+fn cli_preflight_guard_and_affected_tests_work_end_to_end() {
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("vos.db");
+    let proj = dir.path().join("guardproj");
+
+    let core_src = proj.join("crates/core/src");
+    let core_tests = proj.join("crates/core/tests");
+    let cli_src = proj.join("apps/cli/src");
+    fs::create_dir_all(&core_src).unwrap();
+    fs::create_dir_all(&core_tests).unwrap();
+    fs::create_dir_all(&cli_src).unwrap();
+
+    fs::write(
+        proj.join("crates/core/Cargo.toml"),
+        "[package]\nname = \"demo-core\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(core_src.join("lib.rs"), "pub fn greet() -> &'static str { \"hi\" }\n").unwrap();
+    fs::write(core_tests.join("basic.rs"), "fn checks_greet() {}\n").unwrap();
+    fs::write(cli_src.join("main.rs"), "fn main() {}\n").unwrap();
+    fs::write(
+        proj.join("vos.rules.toml"),
+        "[[rule]]\nname = \"cli-no-sqlite\"\nfrom = \"apps/cli\"\nforbid_import = [\"rusqlite\"]\nreason = \"Keep CLI free of SQLite\"\n",
+    )
+    .unwrap();
+
+    assert_vos_ok(&db, &["project", "create", "guardproj", proj.to_str().unwrap()]);
+    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "guardproj"]);
+    assert_vos_ok(
+        &db,
+        &["fact", "add", "greet returns hi", "--project", "guardproj", "--file", "crates/core/src/lib.rs"],
+    );
+    assert_vos_ok(
+        &db,
+        &["claim", "guardproj", "crates/core/src", "--agent", "agent-x"],
+    );
+
+    let guard_ok = assert_vos_ok(&db, &["guard", "guardproj", "--strict", "--json"]);
+    let guard_ok_val: serde_json::Value = serde_json::from_str(&guard_ok).unwrap();
+    assert_eq!(guard_ok_val["passed"], true);
+
+    let aff_json = assert_vos_ok(
+        &db,
+        &["affected-tests", "guardproj", "crates/core/src/lib.rs", "--json"],
+    );
+    let aff_val: serde_json::Value = serde_json::from_str(&aff_json).unwrap();
+    assert_eq!(aff_val["affected_tests"][0]["path"], "crates/core/tests/basic.rs");
+    assert!(aff_val["suggested_commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c == "cargo test -p demo-core --test basic"));
+
+    let pre_json = assert_vos_ok(
+        &db,
+        &["preflight", "guardproj", "crates/core/src/lib.rs", "--json"],
+    );
+    let pre_val: serde_json::Value = serde_json::from_str(&pre_json).unwrap();
+    assert_eq!(pre_val["anchored_facts"].as_array().unwrap().len(), 1);
+    assert_eq!(pre_val["active_leases"].as_array().unwrap().len(), 1);
+    assert_eq!(pre_val["affected_tests"].as_array().unwrap().len(), 1);
+
+    // Introduce forbidden import and confirm `vos guard --strict` exits non-zero.
+    fs::write(cli_src.join("main.rs"), "use rusqlite::Connection;\nfn main() {}\n").unwrap();
+    assert_vos_ok(&db, &["index", proj.to_str().unwrap(), "--project", "guardproj"]);
+    let (ok, stdout, _) = run_vos(&db, &["guard", "guardproj", "--strict", "--json"]);
+    assert!(!ok);
+    let fail_val: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(fail_val["passed"], false);
+    assert_eq!(fail_val["violations"][0]["rule"], "cli-no-sqlite");
+}

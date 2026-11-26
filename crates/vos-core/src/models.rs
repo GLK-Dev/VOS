@@ -1272,3 +1272,58 @@ pub struct RecallHit {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_stale: Option<bool>,
 }
+
+/// Single architectural boundary violation detected by `vos guard`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GuardViolation {
+    pub rule: String,
+    pub from_path: String,
+    pub kind: String,
+    pub violation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Deterministic architectural boundary report returned by `vos guard`.
+#[derive(Debug, Clone, Serialize)]
+pub struct GuardReport {
+    pub project_name: String,
+    pub rules_path: String,
+    pub rules_checked: usize,
+    pub passed: bool,
+    pub violations: Vec<GuardViolation>,
+}
+
+/// Single test target impacted by edits to one or more source files (`vos affected-tests`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AffectedTest {
+    pub path: String,
+    pub distance: usize,
+    pub reason: String,
+}
+
+/// Test-to-code impact report returned by `vos affected-tests`.
+#[derive(Debug, Clone, Serialize)]
+pub struct AffectedTestsReport {
+    pub project_name: String,
+    pub targets: Vec<String>,
+    pub affected_tests: Vec<AffectedTest>,
+    pub suggested_commands: Vec<String>,
+}
+
+/// Pre-edit blast radius, temporal coupling, fact, lease, and test briefing (`vos preflight`).
+#[derive(Debug, Clone, Serialize)]
+pub struct PreflightReport {
+    pub project_name: String,
+    pub targets: Vec<String>,
+    pub direct_dependents: Vec<String>,
+    pub transitive_dependents: Vec<String>,
+    pub co_change_partners: Vec<CoChangePartner>,
+    pub anchored_facts: Vec<ProjectFact>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub active_leases: Vec<AreaLease>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub open_questions: Vec<String>,
+    pub affected_tests: Vec<AffectedTest>,
+    pub suggested_commands: Vec<String>,
+}

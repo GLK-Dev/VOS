@@ -474,6 +474,45 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                 "additionalProperties": false
             }
         }),
+        json!({
+            "name": "vos_guard",
+            "description": "Check declarative architectural guardrails (vos.rules.toml) against graph relations and source imports.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string" },
+                    "rules": { "type": "string", "description": "Optional path to vos.rules.toml." }
+                },
+                "required": ["project"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_affected_tests",
+            "description": "Find impacted test files and minimal verification commands for target files (or dirty/recent files when omitted).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string" },
+                    "targets": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["project"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_preflight",
+            "description": "Run a pre-edit blast simulation combining dependents, temporal co-changes, anchored facts, active leases, open questions, and affected tests.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string" },
+                    "targets": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["project"],
+                "additionalProperties": false
+            }
+        }),
     ]
 }
 
@@ -698,6 +737,21 @@ pub(crate) fn execute_tool(store: &mut Store, name: &str, args: &Value) -> Resul
             let query = require_str(&args_obj, "query")?;
             let limit = opt_usize(&args_obj, "limit")?.unwrap_or(15).clamp(1, 40);
             Ok(serde_json::to_value(store.recall_solutions(query, limit)?)?)
+        }
+        "vos_guard" => {
+            let project = require_str(&args_obj, "project")?;
+            let rules = opt_str(&args_obj, "rules")?.map(std::path::PathBuf::from);
+            Ok(serde_json::to_value(store.check_guard_rules(project, rules.as_deref())?)?)
+        }
+        "vos_affected_tests" => {
+            let project = require_str(&args_obj, "project")?;
+            let targets = opt_str_array(&args_obj, "targets")?;
+            Ok(serde_json::to_value(store.affected_tests(project, &targets)?)?)
+        }
+        "vos_preflight" => {
+            let project = require_str(&args_obj, "project")?;
+            let targets = opt_str_array(&args_obj, "targets")?;
+            Ok(serde_json::to_value(store.preflight(project, &targets)?)?)
         }
         _ => Err(McpError::UnknownTool(name.to_string())),
     }
@@ -1002,6 +1056,16 @@ fn handle_fact_tool(store: &mut Store, args: &Value) -> Result<Value, McpError> 
         }
         other => Err(McpError::InvalidParams(format!(
             "unknown fact action '{other}' (expected add|list|verify|archive)"
+        ))),
+    }
+}
+
+fn opt_str_array(obj: &Value, key: &str) -> Result<Vec<String>, McpError> {
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(_)) => require_str_array(obj, key),
+        Some(_) => Err(McpError::InvalidParams(format!(
+            "argument '{key}' must be an array of strings"
         ))),
     }
 }

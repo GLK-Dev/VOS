@@ -154,6 +154,31 @@ enum Commands {
         #[arg(long, default_value_t = 15)]
         limit: usize,
     },
+    /// Check declarative architectural guardrails (`vos.rules.toml`) for a project.
+    Guard {
+        /// Registered project name.
+        project: String,
+        /// Optional path to `vos.rules.toml` (defaults to `<project_root>/vos.rules.toml`).
+        #[arg(long)]
+        rules: Option<PathBuf>,
+        /// Fail with non-zero exit if any architectural rule is violated.
+        #[arg(long)]
+        strict: bool,
+    },
+    /// Detect test files and minimal verification commands impacted by modifying target files.
+    AffectedTests {
+        /// Registered project name.
+        project: String,
+        /// Target file paths (defaults to dirty or recently modified files).
+        targets: Vec<String>,
+    },
+    /// Run a pre-edit blast simulation combining dependents, co-changes, facts, leases, and tests.
+    Preflight {
+        /// Registered project name.
+        project: String,
+        /// Target file paths (defaults to dirty or recently modified files).
+        targets: Vec<String>,
+    },
     /// Register a directory as a VOS project, index it, and configure MCP clients.
     Init {
         /// Project directory path (defaults to current working directory).
@@ -793,6 +818,132 @@ fn execute_cli(cli: Cli) -> Result<()> {
                         hit.ref_id
                     );
                     println!("   {}", hit.excerpt);
+                }
+            }
+        }
+        Commands::Guard {
+            project,
+            rules,
+            strict,
+        } => {
+            let report = store.check_guard_rules(&project, rules.as_deref())?;
+            if json {
+                print_json(&report)?;
+            } else if report.passed {
+                println!(
+                    "PASS: {} ({} rule(s) checked via {}, 0 violations)",
+                    report.project_name, report.rules_checked, report.rules_path
+                );
+            } else {
+                println!(
+                    "FAIL: {} ({} violation(s) across {} rule(s) via {}):",
+                    report.project_name,
+                    report.violations.len(),
+                    report.rules_checked,
+                    report.rules_path
+                );
+                for v in &report.violations {
+                    println!("  - [{}] {} ({}): {}", v.rule, v.from_path, v.kind, v.violation);
+                    if let Some(reason) = &v.reason {
+                        println!("      reason: {reason}");
+                    }
+                }
+            }
+            if strict && !report.passed {
+                anyhow::bail!(
+                    "guard check failed for `{}` with {} violation(s)",
+                    report.project_name,
+                    report.violations.len()
+                );
+            }
+        }
+        Commands::AffectedTests { project, targets } => {
+            let report = store.affected_tests(&project, &targets)?;
+            if json {
+                return print_json(&report);
+            }
+            println!(
+                "Affected tests for {} (targets: {}):",
+                report.project_name,
+                if report.targets.is_empty() {
+                    "none".to_string()
+                } else {
+                    report.targets.join(", ")
+                }
+            );
+            if report.affected_tests.is_empty() {
+                println!("  No impacted test files detected.");
+            } else {
+                for t in &report.affected_tests {
+                    println!("  - [depth {}] {} -- {}", t.distance, t.path, t.reason);
+                }
+            }
+            if !report.suggested_commands.is_empty() {
+                println!("Suggested commands:");
+                for cmd in &report.suggested_commands {
+                    println!("  {cmd}");
+                }
+            }
+        }
+        Commands::Preflight { project, targets } => {
+            let report = store.preflight(&project, &targets)?;
+            if json {
+                return print_json(&report);
+            }
+            println!(
+                "Preflight for {} (targets: {}):",
+                report.project_name,
+                if report.targets.is_empty() {
+                    "none".to_string()
+                } else {
+                    report.targets.join(", ")
+                }
+            );
+            println!(
+                "  Blast: {} direct dependent(s), {} transitive dependent(s)",
+                report.direct_dependents.len(),
+                report.transitive_dependents.len()
+            );
+            for d in report.direct_dependents.iter().take(12) {
+                println!("    <- {d}");
+            }
+            if !report.co_change_partners.is_empty() {
+                println!("  Co-change partners:");
+                for p in &report.co_change_partners {
+                    println!(
+                        "    - {} ({} commits, ratio {:.2})",
+                        p.path, p.co_commits, p.coupling_ratio
+                    );
+                }
+            }
+            if !report.anchored_facts.is_empty() {
+                println!("  Anchored facts:");
+                for f in &report.anchored_facts {
+                    println!("    - [{:?}] {}", f.status, f.fact_text);
+                }
+            }
+            if !report.active_leases.is_empty() {
+                println!("  Active leases (warning):");
+                for l in &report.active_leases {
+                    println!("    - {} held by {}", l.area, l.agent_id);
+                }
+            }
+            if !report.open_questions.is_empty() {
+                println!("  Open questions:");
+                for q in &report.open_questions {
+                    println!("    - {q}");
+                }
+            }
+            if !report.affected_tests.is_empty() {
+                println!("  Affected tests: {}", report.affected_tests.len());
+                for t in report.affected_tests.iter().take(10) {
+                    println!("    - [d{}] {} ({})", t.distance, t.path, t.reason);
+                }
+            }
+            if !report.suggested_commands.is_empty() {
+                println!("  Suggested commands:");
+                for cmd in &report.suggested_commands {
+                    println!("    {cmd}");
                 }
             }
         }

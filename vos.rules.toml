@@ -1,0 +1,22 @@
+# Architectural boundaries for VOS itself (checked by `vos guard vos --strict`)
+
+[[rule]]
+name = "cli-no-sqlite"
+from = "apps/vos-cli"
+forbid_import = ["rusqlite"]
+forbid_to = ["crates/vos-store/src/batch.rs"]
+reason = "apps/vos-cli must only parse CLI args and format output; SQLite and domain logic live in vos-store"
+
+[[rule]]
+name = "core-stays-pure"
+from = "crates/vos-core"
+forbid_import = ["vos_store", "vos_indexer", "rusqlite"]
+forbid_to = ["crates/vos-store", "crates/vos-indexer", "crates/vos-mcp"]
+reason = "crates/vos-core holds shared domain models and contracts with zero dependency on store or indexer"
+
+[[rule]]
+name = "store-independent-of-indexer-and-mcp"
+from = "crates/vos-store"
+forbid_import = ["vos_indexer", "vos_mcp"]
+forbid_to = ["crates/vos-indexer", "crates/vos-mcp"]
+reason = "crates/vos-store must not depend on crates/vos-indexer or crates/vos-mcp"

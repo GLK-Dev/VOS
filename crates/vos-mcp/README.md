@@ -38,5 +38,8 @@ Stateless stdio **Model Context Protocol (MCP)** server crate for VOS (Velocity 
 - `vos_release`
 - `vos_handoff`
 - `vos_recall`
+- `vos_guard`
+- `vos_affected_tests`
+- `vos_preflight`
 
 Launch via `vos mcp` (optionally with `--db <path>` or `VOS_DB`).

@@ -71,7 +71,7 @@ Solve the real failure modes that appear when multiple AI assistants (`Claude Co
 
 ---
 
-## v1.5 — Pre-Flight Blast Simulator & Architectural Guardrails
+## v1.5 — Pre-Flight Blast Simulator & Architectural Guardrails (`Implemented on experimental`)
 
 Turn VOS from passive memory into an active engineering safety shield executed locally in `<50ms`.
 
