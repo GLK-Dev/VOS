@@ -40,10 +40,11 @@ vos/ (repo root)
 └── crates/
     ├── vos-core/               # Domain models, error types, path/hash/classification helpers
     ├── vos-store/              # SQLite persistence, FTS5 search, context & timeline queries
-    └── vos-indexer/            # Directory walker, ignore rules, chunking, idempotent sync
+    ├── vos-indexer/            # Directory walker, ignore rules, chunking, idempotent sync
+    └── vos-mcp/                # Stateless stdio MCP JSON-RPC 2.0 server and compact tool dispatchers
 ```
 
-**Layering rule:** `vos-cli` contains zero business logic or raw SQL; it parses arguments, calls services in `vos-store` / `vos-indexer`, and formats output.
+**Layering rule:** `vos-cli` contains zero business logic or raw SQL; it parses arguments, calls services in `vos-store` / `vos-indexer` / `vos-mcp`, and formats output.
 
 ---
 
