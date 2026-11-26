@@ -263,7 +263,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "since": { "type": "string", "description": "Start date/offset (YYYY-MM-DD, 7d, 12h, today, yesterday)." },
-                    "project": { "type": "string", "description": "Optional project filter." }
+                    "project": { "type": "string", "description": "Optional project filter." }, "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Max tags to return (default: 50)." }
                 },
                 "required": ["since"],
                 "additionalProperties": false
@@ -307,6 +307,45 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                 "properties": {
                     "repair": { "type": "boolean", "description": "Repair FTS5 drift and clean stale state (default: false)." }
                 },
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_tags",
+            "description": "List all attached tags with object counts (optionally scoped to one project).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string", "description": "Optional project filter." }, "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Max tags to return (default: 50)." }
+                },
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_tag",
+            "description": "Attach one or more manual tags to an indexed file or object.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": { "type": "string", "description": "Object ID, title, or relative/suffix file path." },
+                    "tags": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Tag names to attach." },
+                    "project": { "type": "string", "description": "Optional project scope." }
+                },
+                "required": ["target", "tags"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "vos_untag",
+            "description": "Remove one or more manual tags from an indexed file or object.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": { "type": "string", "description": "Object ID, title, or relative/suffix file path." },
+                    "tags": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Tag names to remove." },
+                    "project": { "type": "string", "description": "Optional project scope." }
+                },
+                "required": ["target", "tags"],
                 "additionalProperties": false
             }
         }),
@@ -437,6 +476,26 @@ pub(crate) fn execute_tool(store: &mut Store, name: &str, args: &Value) -> Resul
             let repair = opt_bool(&args_obj, "repair")?.unwrap_or(false);
             let report = store.doctor(repair)?;
             Ok(serde_json::to_value(report)?)
+        }
+        "vos_tags" => {
+            let project = opt_str(&args_obj, "project")?;
+            let limit = opt_usize(&args_obj, "limit")?.unwrap_or(50).clamp(1, 200);
+            let tags = store.list_tags(project, limit)?;
+            Ok(serde_json::to_value(tags)?)
+        }
+        "vos_tag" => {
+            let target = require_str(&args_obj, "target")?;
+            let project = opt_str(&args_obj, "project")?;
+            let tags = require_str_array(&args_obj, "tags")?;
+            let obj = store.add_tags_scoped(target, project, &tags)?;
+            Ok(serde_json::to_value(obj)?)
+        }
+        "vos_untag" => {
+            let target = require_str(&args_obj, "target")?;
+            let project = opt_str(&args_obj, "project")?;
+            let tags = require_str_array(&args_obj, "tags")?;
+            let obj = store.remove_tags_scoped(target, project, &tags)?;
+            Ok(serde_json::to_value(obj)?)
         }
         _ => Err(McpError::UnknownTool(name.to_string())),
     }
@@ -711,6 +770,29 @@ fn handle_snapshot(store: &Store, args: &Value) -> Result<Value, McpError> {
             "unknown snapshot action '{other}' (expected create|list|compare_live)"
         ))),
     }
+}
+
+fn require_str_array(obj: &Value, key: &str) -> Result<Vec<String>, McpError> {
+    let Some(arr) = obj.get(key).and_then(Value::as_array) else {
+        return Err(McpError::InvalidParams(format!(
+            "missing required string array argument '{key}'"
+        )));
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        let Some(s) = item.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+            return Err(McpError::InvalidParams(format!(
+                "argument '{key}' entries must be non-empty strings"
+            )));
+        };
+        out.push(s.to_string());
+    }
+    if out.is_empty() {
+        return Err(McpError::InvalidParams(format!(
+            "argument '{key}' cannot be empty"
+        )));
+    }
+    Ok(out)
 }
 
 fn require_str<'a>(obj: &'a Value, key: &str) -> Result<&'a str, McpError> {

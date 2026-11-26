@@ -19,7 +19,7 @@ static COMPACT_JSON: AtomicBool = AtomicBool::new(false);
 fn is_compact_json() -> bool {
     COMPACT_JSON.load(Ordering::Relaxed)
 }
-use vos_indexer::{IndexOptions, InitOptions, index_path_with_options, init_project};
+use vos_indexer::{IndexOptions, InitOptions, WatchOptions, index_path_with_options, init_project, watch_path_with_options};
 use vos_store::{SearchFilters, Store, load_benchmark_cases};
 
 #[derive(Debug, Parser)]
@@ -72,6 +72,20 @@ enum Commands {
         /// Overwrite existing 'vos' MCP entries or malformed config files.
         #[arg(long)]
         force: bool,
+        /// Include files ignored by .gitignore / .vosignore.
+        #[arg(long)]
+        no_ignore: bool,
+    },
+    /// Watch a registered project or directory in the foreground and re-index on file changes.
+    Watch {
+        /// Registered project name or directory path (defaults to current directory).
+        target: Option<String>,
+        /// Project name to associate indexed files with when watching a path.
+        #[arg(long)]
+        project: Option<String>,
+        /// Poll interval in milliseconds.
+        #[arg(long, default_value_t = 1500)]
+        interval_ms: u64,
         /// Include files ignored by .gitignore / .vosignore.
         #[arg(long)]
         no_ignore: bool,
@@ -556,6 +570,51 @@ fn execute_cli(cli: Cli) -> Result<()> {
     let json = cli.json;
     match cli.command {
         Commands::Mcp => vos_mcp::serve_stdio(&mut store)?,
+        Commands::Watch {
+            target,
+            project,
+            interval_ms,
+            no_ignore,
+        } => {
+            let (watch_root, proj_name) = resolve_watch_target(&store, target.as_deref(), project)?;
+            let interval = std::time::Duration::from_millis(interval_ms.max(100));
+            if !json {
+                println!(
+                    "Watching {} ({}) every {}ms (Ctrl+C to stop)...",
+                    watch_root.display(),
+                    proj_name.as_deref().unwrap_or("unassigned"),
+                    interval.as_millis()
+                );
+            }
+            watch_path_with_options(
+                &mut store,
+                &watch_root,
+                proj_name.as_deref(),
+                WatchOptions {
+                    interval,
+                    no_ignore,
+                    max_iterations: None,
+                },
+                |report| {
+                    if json {
+                        let _ = print_json(&JsonIndexReport::from(report));
+                    } else {
+                        let ts = Local::now().format("%H:%M:%S");
+                        println!(
+                            "[{ts}] scanned: {} | updated: {} (+{} ~{} ^{}) | deleted: {} | rels: {} ({}ms)",
+                            report.scanned,
+                            report.added + report.modified + report.restored,
+                            report.added,
+                            report.modified,
+                            report.restored,
+                            report.deleted,
+                            report.relations,
+                            report.elapsed.as_millis()
+                        );
+                    }
+                },
+            )?;
+        }
         Commands::Init {
             path,
             name,
@@ -2767,6 +2826,23 @@ fn pct(passed: usize, total: usize) -> f64 {
     }
 }
 
+fn resolve_watch_target(
+    store: &Store,
+    target: Option<&str>,
+    explicit_project: Option<String>,
+) -> Result<(PathBuf, Option<String>)> {
+    if let Some(raw) = target
+        && let Some(proj) = store.get_project_by_name(raw)?
+    {
+        let root = proj.root_path.ok_or_else(|| {
+            anyhow::anyhow!("project '{raw}' has no root_path; pass a filesystem path")
+        })?;
+        return Ok((PathBuf::from(root), Some(proj.name)));
+    }
+    let path = target.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+    Ok((path, explicit_project))
+}
+
 fn default_db_path() -> PathBuf {
     let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
     match home {
@@ -3032,6 +3108,14 @@ fn print_git_context(git: &vos_core::GitContext) {
         );
     } else {
         println!("  branch: {} | clean", git.branch);
+    }
+    for entry in git.changed_files.iter().take(6) {
+        println!("    - {entry}");
+    }
+    let total_dirty = git.modified_count + git.staged_count + git.untracked_count;
+    if total_dirty > git.changed_files.iter().take(6).count() {
+        let shown = git.changed_files.iter().take(6).count();
+        println!("    ... and {} more", total_dirty - shown);
     }
     if let Some(ref hash) = git.last_commit_hash {
         let subj = git.last_commit_subject.as_deref().unwrap_or("");

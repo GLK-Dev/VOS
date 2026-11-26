@@ -1418,6 +1418,7 @@ fn cli_init_and_git_context_work_end_to_end() {
         let st_val: serde_json::Value = serde_json::from_str(&st_compact).unwrap();
         assert_eq!(st_val["git"]["last_commit_subject"], "initial commit");
         assert_eq!(st_val["git"]["is_dirty"], true); // .mcp.json untracked!
+        assert!(!st_val["git"]["changed_files"].as_array().unwrap().is_empty());
 
         let cont_text = assert_vos_ok(&db, &["continue", "initgit"]);
         assert!(cont_text.contains("Git:"));

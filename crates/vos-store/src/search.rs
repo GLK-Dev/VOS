@@ -33,6 +33,8 @@ const MULTI_CHUNK_MAX_BOOST: f64 = 6.0;
 const NOISE_PENALTY: f64 = -10.0;
 /// Penalty applied to internal search/benchmark config files unless --include-internal is passed.
 const INTERNAL_ARTIFACT_PENALTY: f64 = -20.0;
+/// Penalty applied to bulk media/binary/other assets unless --kind targets them.
+const NON_WORK_ASSET_PENALTY: f64 = -40.0;
 /// Minimum non-noise Stage 1 (AND) hits before triggering Stage 2 (OR) fallback.
 const STAGE2_FALLBACK_MIN_HITS: usize = 3;
 
@@ -280,6 +282,7 @@ impl Store {
                     intent,
                     synonyms,
                     include_internal,
+                    kind_str.is_some(),
                 );
                 cand.hit.score = score;
                 cand.hit.signals = signals;
@@ -703,6 +706,7 @@ fn score_search_candidate(
     intent: QueryIntent,
     synonyms: &[String],
     include_internal: bool,
+    explicit_kind_filter: bool,
 ) -> (f64, Vec<SearchSignal>) {
     let mut signals = Vec::new();
     let title_multiplier = if intent == QueryIntent::Concept {
@@ -860,6 +864,13 @@ fn score_search_candidate(
         signals.push(SearchSignal {
             label: "noise penalty".to_string(),
             delta: NOISE_PENALTY,
+        });
+    }
+
+    if !explicit_kind_filter && !cand.hit.kind.is_primary_work_kind() {
+        signals.push(SearchSignal {
+            label: "non-work asset penalty".to_string(),
+            delta: NON_WORK_ASSET_PENALTY,
         });
     }
 
@@ -1306,5 +1317,56 @@ mod tests {
             )
             .unwrap();
         assert_eq!(include_hits[0].title, "concepts.yaml");
+    }
+
+    #[test]
+    fn primary_work_outranks_media_assets_unless_kind_filtered() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("demo", None, None).unwrap();
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(crate::UpsertObjectInput {
+                project_id: Some(proj.id.clone()),
+                path: "design/icons/database.svg".to_string(),
+                kind: ObjectKind::Media,
+                title: "database.svg".to_string(),
+                summary: Some("database svg icon asset".to_string()),
+                content_hash: "h1".to_string(),
+                size_bytes: 120,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec!["svg database icon".to_string()],
+            })
+            .unwrap();
+        batch
+            .upsert_object(crate::UpsertObjectInput {
+                project_id: Some(proj.id),
+                path: "migrations/0001_init.sql".to_string(),
+                kind: ObjectKind::Config,
+                title: "0001_init.sql".to_string(),
+                summary: Some("SQLite database schema migration".to_string()),
+                content_hash: "h2".to_string(),
+                size_bytes: 200,
+                modified_at: 100,
+                is_noise: false,
+                chunks: vec!["CREATE TABLE objects -- database schema".to_string()],
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        let default_hits = store.search("database", Some("demo"), 5).unwrap();
+        assert_eq!(default_hits[0].path, "migrations/0001_init.sql");
+
+        let media_hits = store
+            .search_with_filters(
+                Some("database"),
+                crate::SearchFilters {
+                    project: Some("demo"),
+                    kind: Some(ObjectKind::Media),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(media_hits[0].path, "design/icons/database.svg");
     }
 }

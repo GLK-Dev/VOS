@@ -3,8 +3,10 @@
 mod lang_refs;
 mod relations;
 mod setup;
+mod watch;
 
 pub use setup::{InitOptions, InitReport, McpConfigStatus, init_project};
+pub use watch::{WatchOptions, compute_tree_signature, watch_path_with_options};
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -73,6 +75,36 @@ pub struct IndexReport {
     pub elapsed: Duration,
 }
 
+pub(crate) fn walk_project_files(canonical_root: &str, no_ignore: bool) -> ignore::Walk {
+    let mut builder = WalkBuilder::new(canonical_root);
+    builder
+        .hidden(false)
+        .follow_links(false)
+        .parents(!no_ignore)
+        .ignore(!no_ignore)
+        .git_ignore(!no_ignore)
+        .git_global(!no_ignore)
+        .git_exclude(!no_ignore)
+        .require_git(false);
+
+    if !no_ignore {
+        builder.add_custom_ignore_filename(".vosignore");
+    }
+
+    builder.filter_entry(|entry| {
+        let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
+        if !is_dir {
+            return true;
+        }
+        entry
+            .file_name()
+            .to_str()
+            .is_none_or(|name| !IGNORED_DIRS.contains(&name))
+    });
+
+    builder.build()
+}
+
 /// Scans `root` with default options and idempotently synchronizes into `store`.
 pub fn index_path(
     store: &mut Store,
@@ -108,33 +140,7 @@ pub fn index_path_with_options(
     let mut inputs = Vec::new();
     let mut raw_refs_by_path: Vec<(String, Vec<RawRef>)> = Vec::new();
 
-    let mut builder = WalkBuilder::new(&canonical_root);
-    builder
-        .hidden(false)
-        .follow_links(false)
-        .parents(!options.no_ignore)
-        .ignore(!options.no_ignore)
-        .git_ignore(!options.no_ignore)
-        .git_global(!options.no_ignore)
-        .git_exclude(!options.no_ignore)
-        .require_git(false);
-
-    if !options.no_ignore {
-        builder.add_custom_ignore_filename(".vosignore");
-    }
-
-    builder.filter_entry(|entry| {
-        let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
-        if !is_dir {
-            return true;
-        }
-        entry
-            .file_name()
-            .to_str()
-            .is_none_or(|name| !IGNORED_DIRS.contains(&name))
-    });
-
-    for entry_result in builder.build() {
+    for entry_result in walk_project_files(&canonical_root, options.no_ignore) {
         let entry = match entry_result {
             Ok(e) => e,
             Err(err) => {

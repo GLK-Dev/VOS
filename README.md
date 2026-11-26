@@ -13,7 +13,7 @@ See [SPEC.md](SPEC.md) for the canonical v0.1 specification, [AGENTS.md](AGENTS.
 ### Validation Summary
 
 - `10` real projects indexed (`780+` active objects, `1690+` deterministic relations)
-- `99 / 99` workspace tests passing (`0` clippy warnings under `-D warnings`)
+- `101 / 101` workspace tests passing (`0` clippy warnings under `-D warnings`)
 - `30 / 30` live sprint recovery scenarios passing (`~110ms` median CLI latency)
 - `24 / 24` isolated multi-project session lifecycle checks passing (`active=0`)
 
@@ -41,6 +41,7 @@ vos project update my-app --path ./new/path --description "Core service"
 vos project remove old-app
 vos index ./path/to/project --project my-app
 vos index --all
+vos watch my-app --interval-ms 1500
 
 # Context Recovery & Continuation
 vos start my-app
@@ -123,7 +124,7 @@ VOS provides a stateless stdio **Model Context Protocol (MCP)** server (`vos mcp
 }
 ```
 
-**Exposed MCP tools (18):** `vos_init`, `vos_list_projects`, `vos_continue`, `vos_status`, `vos_search`, `vos_show`, `vos_why`, `vos_graph`, `vos_drift`, `vos_coverage`, `vos_evolution`, `vos_changed_since`, `vos_related`, `vos_snapshot`, `vos_index`, `vos_session_start`, `vos_session_stop`, `vos_doctor`.
+**Exposed MCP tools (21):** `vos_init`, `vos_list_projects`, `vos_continue`, `vos_status`, `vos_search`, `vos_show`, `vos_why`, `vos_graph`, `vos_drift`, `vos_coverage`, `vos_evolution`, `vos_changed_since`, `vos_related`, `vos_snapshot`, `vos_tags`, `vos_tag`, `vos_untag`, `vos_index`, `vos_session_start`, `vos_session_stop`, `vos_doctor`.
 
 ### Compact CLI Mode
 

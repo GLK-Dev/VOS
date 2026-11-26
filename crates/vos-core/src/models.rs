@@ -284,6 +284,8 @@ pub struct GitContext {
     pub staged_count: usize,
     pub modified_count: usize,
     pub untracked_count: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub changed_files: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_commit_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

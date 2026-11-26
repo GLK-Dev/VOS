@@ -321,6 +321,9 @@ mod tests {
             (5, "vos_related", json!({ "target": "src/lib.rs", "project": "fullmcp" })),
             (6, "vos_snapshot", json!({ "action": "create", "project": "fullmcp", "label": "s1" })),
             (7, "vos_doctor", json!({ "repair": false })),
+            (8, "vos_tag", json!({ "target": "src/lib.rs", "project": "fullmcp", "tags": ["core"] })),
+            (9, "vos_tags", json!({ "project": "fullmcp" })),
+            (10, "vos_untag", json!({ "target": "src/lib.rs", "project": "fullmcp", "tags": ["core"] })),
         ] {
             let req = json!({
                 "jsonrpc": "2.0", "id": id, "method": "tools/call",

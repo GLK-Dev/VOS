@@ -62,17 +62,24 @@ pub(crate) fn parse_status_porcelain(raw: &str) -> Option<GitContext> {
     let header = lines.next()?;
     let branch = parse_branch_header(header);
 
+    const MAX_CHANGED_FILES: usize = 10;
     let mut staged_count = 0_usize;
     let mut modified_count = 0_usize;
     let mut untracked_count = 0_usize;
+    let mut changed_files = Vec::new();
 
     for line in lines {
-        if line.len() < 2 {
+        if line.len() < 3 {
             continue;
         }
         let bytes = line.as_bytes();
         let x = bytes[0] as char;
         let y = bytes[1] as char;
+        let path_part = line[2..].trim_start();
+        if !path_part.is_empty() && changed_files.len() < MAX_CHANGED_FILES {
+            let status_code = format!("{x}{y}").trim().to_string();
+            changed_files.push(format!("{status_code} {path_part}"));
+        }
         if x == '?' && y == '?' {
             untracked_count += 1;
             continue;
@@ -92,6 +99,7 @@ pub(crate) fn parse_status_porcelain(raw: &str) -> Option<GitContext> {
         staged_count,
         modified_count,
         untracked_count,
+        changed_files,
         last_commit_hash: None,
         last_commit_subject: None,
         last_commit_at: None,
@@ -151,6 +159,8 @@ MM SPEC.md
         assert_eq!(ctx.staged_count, 2);
         assert_eq!(ctx.modified_count, 2);
         assert_eq!(ctx.untracked_count, 1);
+        assert_eq!(ctx.changed_files.len(), 4);
+        assert_eq!(ctx.changed_files[0], "M apps/vos-cli/src/main.rs");
     }
 
     #[test]
