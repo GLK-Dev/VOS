@@ -48,10 +48,14 @@ impl Store {
         let max_items = limit.clamp(1, 25);
         let root_prefix = project.root_path.as_deref().unwrap_or("");
 
-        let objects = self.load_active_non_noise_objects(&project.id)?;
+        let all_objects = self.load_active_non_noise_objects(&project.id)?;
+        let has_primary_work = all_objects.iter().any(|o| o.kind.is_primary_work_kind());
         let mut by_area: HashMap<String, OwnershipAccum> = HashMap::new();
 
-        for obj in &objects {
+        for obj in all_objects
+            .iter()
+            .filter(|o| !has_primary_work || o.kind.is_primary_work_kind())
+        {
             let area = object_area(&obj.path, root_prefix);
             let entry = by_area.entry(area).or_default();
             entry.file_count += 1;
@@ -66,17 +70,25 @@ impl Store {
         }
 
         let mut ev_stmt = self.conn.prepare(
-            "SELECT e.path
+            "SELECT e.path, COALESCE(o.kind, '')
              FROM events e
              LEFT JOIN objects o ON o.id = e.object_id
              WHERE e.project_id = ?1
                AND COALESCE(o.is_noise, 0) = 0",
         )?;
-        let ev_paths = ev_stmt
-            .query_map(params![project.id], |row| row.get::<_, String>(0))?
+        let ev_rows = ev_stmt
+            .query_map(params![project.id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
             .collect::<Result<Vec<_>, _>>()?;
 
-        for path in ev_paths {
+        for (path, kind_str) in ev_rows {
+            if has_primary_work
+                && !kind_str.is_empty()
+                && !ObjectKind::from_db(&kind_str).is_primary_work_kind()
+            {
+                continue;
+            }
             let area = object_area(&path, root_prefix);
             by_area.entry(area).or_default().event_count += 1;
         }
@@ -920,5 +932,51 @@ mod tests {
             "let x = foo(); // FIXME: edge case"
         ));
         assert!(line_has_unfinished_marker("# TODO: clean temp files"));
+    }
+
+    #[test]
+    fn ownership_prioritizes_code_and_docs_over_bulk_media_assets() {
+        let mut store = Store::open_in_memory().unwrap();
+        let proj = store.create_project("assets_ui", None, None).unwrap();
+        let now = now_unix();
+
+        let mut batch = store.begin_index_batch().unwrap();
+        batch
+            .upsert_object(obj_input(&proj.id, "crates/core/lib.rs", ObjectKind::Code, now - 60))
+            .unwrap();
+        batch
+            .upsert_object(obj_input(&proj.id, "Docs/ARCH.md", ObjectKind::Note, now - 120))
+            .unwrap();
+        for i in 0..20 {
+            let kind = if i % 2 == 0 { ObjectKind::Media } else { ObjectKind::Other };
+            batch
+                .upsert_object(obj_input(
+                    &proj.id,
+                    &format!("design/icons/icon_{i}.png"),
+                    kind,
+                    now - 10,
+                ))
+                .unwrap();
+        }
+        batch.commit().unwrap();
+
+        let own = store.project_ownership("assets_ui", 14, 8).unwrap();
+        let areas: Vec<&str> = own.most_active_areas.iter().map(|a| a.area.as_str()).collect();
+        assert!(areas.contains(&"crates/core"));
+        assert!(areas.contains(&"Docs"));
+        assert!(!areas.contains(&"design/icons"));
+
+        // Asset-only repositories still surface asset areas when no primary work files exist.
+        let bin_proj = store.create_project("bin_only", None, None).unwrap();
+        store
+            .upsert_object(obj_input(
+                &bin_proj.id,
+                "bundles/app.hpkg",
+                ObjectKind::Other,
+                now - 30,
+            ))
+            .unwrap();
+        let bin_own = store.project_ownership("bin_only", 14, 8).unwrap();
+        assert_eq!(bin_own.most_active_areas[0].area, "bundles");
     }
 }

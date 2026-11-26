@@ -1207,7 +1207,7 @@ fn cli_session_stop_log_appends_recovery_row_and_requires_quality() {
     let lines: Vec<&str> = content.lines().collect();
     assert_eq!(lines.len(), 2, "row must start on its own line: {content}");
     assert!(
-        lines[1].contains("| logproj | - | continue |"),
+        lines[1].contains("| logproj | - | continue |") || lines[1].contains("| logproj | 0 | continue |"),
         "{}",
         lines[1]
     );

@@ -966,7 +966,12 @@ fn compute_active_areas(
     let trimmed_root = root_prefix.trim_end_matches(['/', '\\']);
 
     let _ = trimmed_root;
-    for obj in non_noise_objects.iter().take(40) {
+    let has_primary = non_noise_objects.iter().any(|o| o.kind.is_primary_work_kind());
+    for obj in non_noise_objects
+        .iter()
+        .filter(|o| !has_primary || o.kind.is_primary_work_kind())
+        .take(40)
+    {
         let area = object_area(&obj.path, root_prefix);
 
         let entry = areas.entry(area).or_insert((0, obj.modified_at));
@@ -1283,5 +1288,47 @@ mod tests {
         );
         assert_eq!(cont.open_questions, start.open_questions);
         assert_eq!(status.open_questions, start.open_questions);
+    }
+
+    #[test]
+    fn compute_active_areas_skips_bulk_media_assets_when_work_files_exist() {
+        let now = now_unix();
+        let mut objs = Vec::new();
+        for i in 0..45 {
+            objs.push(ObjectRecord {
+                id: format!("m{i}"),
+                project_id: Some("p".to_string()),
+                path: format!("/repo/design/icons/ic_{i}.png"),
+                kind: ObjectKind::Media,
+                title: format!("ic_{i}.png"),
+                summary: None,
+                content_hash: "hm".to_string(),
+                size_bytes: 10,
+                modified_at: now - i as i64,
+                indexed_at: now,
+                is_deleted: false,
+                deleted_at: None,
+                is_noise: false,
+            });
+        }
+        objs.push(ObjectRecord {
+            id: "c1".to_string(),
+            project_id: Some("p".to_string()),
+            path: "/repo/crates/ui/lib.rs".to_string(),
+            kind: ObjectKind::Code,
+            title: "lib.rs".to_string(),
+            summary: None,
+            content_hash: "hc".to_string(),
+            size_bytes: 50,
+            modified_at: now - 100,
+            indexed_at: now,
+            is_deleted: false,
+            deleted_at: None,
+            is_noise: false,
+        });
+
+        let areas = compute_active_areas(&objs, "/repo", 5);
+        assert_eq!(areas.len(), 1);
+        assert_eq!(areas[0].area, "crates/ui");
     }
 }

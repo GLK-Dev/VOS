@@ -45,6 +45,11 @@ impl ObjectKind {
         matches!(self, Self::Code | Self::Note | Self::Config)
     }
 
+    /// Returns true for core project work files (code, notes, docs, configs) over static assets.
+    pub fn is_primary_work_kind(&self) -> bool {
+        matches!(self, Self::Code | Self::Note | Self::Doc | Self::Config)
+    }
+
     /// Relative priority used to surface human-meaningful files in `vos context`.
     pub fn context_priority(&self) -> i64 {
         match self {
