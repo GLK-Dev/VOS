@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>VOS Wiki — Velocity Orientation System Documentation</title>
+  <meta name="description" content="Complete technical guide, Context Compiler, Blast Guardrails, Cognitive Bus, AST Archaeology, Constellation HUD, and 35 MCP Tools reference for VOS 2.0."/>
+  <link rel="icon" type="image/svg+xml" href="assets/vos-logo.svg"/>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+<div class="nebula"></div>
+
+<header class="topbar">
+  <div class="container topbar-inner">
+    <a class="brand" href="index.html">
+      <img src="assets/vos-logo.jpg" alt="VOS Logo"/>
+      <span>VOS</span>
+      <span class="badge-ver">v2.0.0 Wiki</span>
+    </a>
+    <nav class="nav">
+      <a href="index.html" data-en="Home" data-ru="Главная">Home</a>
+      <a href="wiki.html" class="active" data-en="Wiki Docs" data-ru="Wiki-доки">Wiki Docs</a>
+      <a href="wiki.html#mcp-reference" data-en="35 MCP Tools" data-ru="35 MCP Tools">35 MCP Tools</a>
+      <a href="https://github.com/GLK-Dev/VOS" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+    <div class="top-actions">
+      <div class="lang-toggle" role="group" aria-label="Language">
+        <button type="button" data-lang="en" class="active">EN</button>
+        <button type="button" data-lang="ru">RU</button>
+      </div>
+      <a class="btn btn-primary btn-sm" href="index.html#install" data-en="Install CLI" data-ru="Установить CLI">Install CLI</a>
+    </div>
+  </div>
+</header>
+
+<div class="wiki-shell">
+  <aside class="wiki-sidebar">
+    <input id="wikiSearch" class="wiki-search" type="search" placeholder="Search wiki (Ctrl+K)..." aria-label="Search wiki"/>
+    <div id="wikiNav"></div>
+  </aside>
+  <main class="wiki-article" id="wikiArticle"></main>
+</div>
+
+<script src="i18n.js"></script>
+<script src="app.js"></script>
+<script src="wiki-data.js"></script>
+<script>
+(function () {
+  const navEl = document.getElementById('wikiNav');
+  const artEl = document.getElementById('wikiArticle');
+  const searchEl = document.getElementById('wikiSearch');
+  let activeId = (location.hash || '#getting-started').slice(1);
+
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function renderArticle(id) {
+    const pages = window.VOS_WIKI || [];
+    const idx = Math.max(0, pages.findIndex(p => p.id === id));
+    const page = pages[idx];
+    if (!page) return;
+    activeId = page.id;
+    const lang = (window.getVosLang && window.getVosLang()) || 'en';
+    const content = lang === 'ru' ? page.ru : page.en;
+
+    navEl.querySelectorAll('.wiki-nav-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.id === page.id);
+    });
+
+    const blocksHtml = content.sections.map(sec => {
+      const codeHtml = sec.code ? `<div class="wiki-code-wrap"><button class="copy-btn" type="button">Copy</button><pre>${esc(sec.code)}</pre></div>` : '';
+      const listHtml = sec.bullets ? `<ul>${sec.bullets.map(b => `<li>${b}</li>`).join('')}</ul>` : '';
+      const pHtml = sec.body ? `<p>${sec.body}</p>` : '';
+      return `<h2>${sec.heading}</h2>${pHtml}${listHtml}${codeHtml}`;
+    }).join('');
+
+    const prev = idx > 0 ? pages[idx - 1] : null;
+    const next = idx + 1 < pages.length ? pages[idx + 1] : null;
+    const pagerHtml = `<div class="wiki-pager">
+      <div>${prev ? `<button class="btn btn-ghost btn-sm" data-jump="${prev.id}">← ${(lang==='ru'?prev.ru:prev.en).title}</button>` : ''}</div>
+      <div>${next ? `<button class="btn btn-primary btn-sm" data-jump="${next.id}">${(lang==='ru'?next.ru:next.en).title} →</button>` : ''}</div>
+    </div>`;
+
+    artEl.innerHTML = `<span class="card-tag">${page.tag}</span><h1>${content.title}</h1><p style="color:var(--muted);font-size:16px">${content.summary}</p>${blocksHtml}${pagerHtml}`;
+
+    artEl.querySelectorAll('.copy-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const pre = btn.nextElementSibling;
+        window.copyText(btn, pre.textContent);
+      });
+    });
+    artEl.querySelectorAll('[data-jump]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        location.hash = '#' + btn.dataset.jump;
+        renderArticle(btn.dataset.jump);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+    });
+  }
+
+  function buildNav(filterText) {
+    const pages = window.VOS_WIKI || [];
+    const lang = (window.getVosLang && window.getVosLang()) || 'en';
+    const q = (filterText || '').trim().toLowerCase();
+    searchEl.placeholder = lang === 'ru' ? 'Поиск по Wiki (Ctrl+K)...' : 'Search wiki (Ctrl+K)...';
+
+    const matched = pages.filter(p => {
+      if (!q) return true;
+      const obj = lang === 'ru' ? p.ru : p.en;
+      const blob = (obj.title + ' ' + obj.summary + ' ' + JSON.stringify(obj.sections)).toLowerCase();
+      return blob.includes(q);
+    });
+
+    navEl.innerHTML = matched.map(p => {
+      const obj = lang === 'ru' ? p.ru : p.en;
+      return `<button type="button" class="wiki-nav-btn ${p.id===activeId?'active':''}" data-id="${p.id}">${obj.title}</button>`;
+    }).join('') || `<div style="color:var(--muted);font-size:13px;padding:8px">No matching docs</div>`;
+
+    navEl.querySelectorAll('.wiki-nav-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        location.hash = '#' + btn.dataset.id;
+        renderArticle(btn.dataset.id);
+      });
+    });
+  }
+
+  window.onVosLangChange = function () {
+    buildNav(searchEl.value);
+    renderArticle(activeId);
+  };
+
+  window.addEventListener('hashchange', () => renderArticle((location.hash || '#getting-started').slice(1)));
+  searchEl.addEventListener('input', () => buildNav(searchEl.value));
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault(); searchEl.focus();
+    }
+  });
+
+  document.addEventListener('DOMContentLoaded', () => {
+    buildNav('');
+    renderArticle(activeId);
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,4 +1,17 @@
-# VOS — Velocity Orientation System
+<p align="center">
+  <img src="website/assets/vos-logo.svg" alt="VOS Logo" width="84"/>
+</p>
+<h1 align="center">VOS — Velocity Orientation System</h1>
+<p align="center">
+  <a href="https://glk-dev.github.io/VOS/"><strong>Live Website &amp; Interactive Wiki</strong></a> ·
+  <a href="https://glk-dev.github.io/VOS/wiki.html#mcp-reference"><strong>35 MCP Tools</strong></a> ·
+  <a href="CHANGELOG.md"><strong>Changelog (v2.0.0)</strong></a> ·
+  <a href="SPEC.md"><strong>Spec</strong></a> ·
+  <a href="LICENSE.md"><strong>GUIL-1.0</strong></a>
+</p>
+<p align="center">
+  <img src="website/assets/vos-banner.jpg" alt="VOS Constellation Banner" width="860"/>
+</p>
 
 VOS is a local-first **Project Memory System** built on SQLite + FTS5 + deterministic heuristics to help you recover project context, track evolution, detect drift, and decide what to do next.
 
